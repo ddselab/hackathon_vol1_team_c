@@ -2,3 +2,7 @@ root = true
 
 [*]
 charset = utf-8-bom
+
+# GitHubのテンプレートはBOMがあると正しく読み込まれないため、BOMなしにする
+[.github/**]
+charset = utf-8
