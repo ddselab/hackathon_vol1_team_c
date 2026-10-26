@@ -1,4 +1,12 @@
-﻿## 概要
+---
+name: Issue
+about: タスクを報告する
+title: ""
+labels: []
+assignees: []
+---
+
+## 概要
 
 <!-- 何をするIssueなのかを短く書く -->
 
