@@ -31,7 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PATH = os.path.join(HERE, "slots.json")
 LOCK = (
     threading.Lock()
-)  # ボタン処理と出席イベント処理（POST /event）が同時にファイルを触らないように
+)  # ボタン処理と出席イベント処理（POST /event, /events）が同時にファイルを触らないように
 DAYS = "月火水木金土日"
 NAME_MAX = (
     16  # 名札の文字数。日本語・英語の名前まで余裕をもって（表ではセル内で折り返される）
@@ -331,6 +331,7 @@ def submit_claim(rack, events, now, user, values):
 # ── カメラ側から出席情報を受け取る ──────────────────────────────────────────
 # 取り決め: カメラ側は「何番のマスに靴が入った／出た」だけを送る。誰のマスかはこの Bot が slots.json から調べる。
 #   POST /event  {"slot": 12, "event": "in", "time": "2026-10-26T09:12:00"}   time は省略可 → 受け取った時刻で記録
+#   POST /events {"slots": {"1": "in", "2": "out", ..., "32": "out"}, "time": ...}   複数マスを 1 回でまとめて送る
 #   GET  /slots  {"cols": 8, "rows": 4, "used": [1, 3, 12]}                    名前・Slack ID は返さない
 #   POST /photo  本文 = JPEG そのまま（Content-Type: image/jpeg）              PHOTO_CHANNEL のチャンネルに投稿
 # チャタリング対策（入室 10 秒・退室 2 分の維持）はカメラ側の担当。この Bot は確定した変化だけを受け取る前提。
@@ -357,6 +358,30 @@ def apply_event(rack, events, slot, kind, when):
     ):  # すでに同じ状態（例: 今日記録のない人にまた out）
         return None, "すでに同じ状態なので記録しません"
     return user, None
+
+
+def apply_events(rack, events, states, when):
+    """複数マスの状態をまとめて判定。（記録する [(マス番号, 人の ID, in/out)], {マス番号: 記録しない理由}）。"""
+    recorded, notes = [], {}
+    for slot, kind in sorted(states.items()):
+        user, why = apply_event(rack, events, slot, kind, when)
+        if user:
+            recorded.append((slot, user, kind))
+        else:
+            notes[slot] = why
+    return recorded, notes
+
+
+def parse_states(body):
+    """POST /events の本文から {マス番号: "in" か "out"} を取り出す。形式が違えば ValueError。"""
+    slots = body.get("slots")
+    if not isinstance(slots, dict) or not slots:
+        raise ValueError('slots に {"マス番号": "in" か "out"} を入れてください')
+    states = {int(k): v for k, v in slots.items()}
+    bad = [k for k, v in states.items() if v not in ("in", "out")]
+    if bad:  # 1 つでもおかしければ、どのマスも記録しない
+        raise ValueError(f"{bad}番の値は in か out にしてください")
+    return states
 
 
 def append_attendance(path, when, user, kind):
@@ -401,32 +426,48 @@ def start_event_server(on_change, on_photo=None, port=EVENT_PORT):
         def do_POST(self):
             if self.path == "/photo":
                 return self.photo()
-            if self.path != "/event":
+            if self.path not in ("/event", "/events"):
                 return self.reply(
-                    404, {"ok": False, "error": "POST は /event と /photo だけです"}
+                    404,
+                    {"ok": False, "error": "POST は /event, /events, /photo だけです"},
                 )
+            single = self.path == "/event"
             try:
                 body = json.loads(
                     self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}"
                 )
-                slot, kind = int(body["slot"]), body["event"]
+                states = (
+                    {int(body["slot"]): body["event"]} if single else parse_states(body)
+                )
                 when = (
                     datetime.fromisoformat(body["time"])
                     if body.get("time")
                     else datetime.now()
                 )
-            except (ValueError, KeyError, TypeError) as e:
+            except (ValueError, KeyError, TypeError, AttributeError) as e:
                 return self.reply(
                     400, {"ok": False, "error": f"形式が正しくありません: {e!r}"}
                 )
             with LOCK:  # ボタン処理と同時にファイルを触らないように
                 rack, events = canvas.load(HERE)
-                user, why = apply_event(rack, events, slot, kind, when)
-                if user:
+                recorded, notes = apply_events(rack, events, states, when)
+                for _, user, kind in recorded:
                     append_attendance(CSV, when, user, kind)
-            if user:
-                on_change()  # 表を描き直す
-            self.reply(200, {"ok": True, "recorded": bool(user), "note": why})
+            if recorded:
+                on_change()  # 何マス変わっても表の描き直しは 1 回だけ
+            if single:
+                note = next(iter(notes.values()), None)
+                return self.reply(
+                    200, {"ok": True, "recorded": bool(recorded), "note": note}
+                )
+            self.reply(
+                200,
+                {
+                    "ok": True,
+                    "recorded": [slot for slot, _, _ in recorded],
+                    "notes": {str(slot): why for slot, why in notes.items()},
+                },
+            )
 
         def photo(self):
             if not on_photo:
@@ -520,7 +561,7 @@ def run():
             request_file_info=False,
         )  # True だと files:read 権限も必要になる
 
-    # カメラ側から出席情報・写真を受け取る（POST /event, GET /slots, POST /photo）。カメラとつなぐときに下の行頭の "# " を消すと有効になる。
+    # カメラ側から出席情報・写真を受け取る（POST /event, POST /events, GET /slots, POST /photo）。カメラとつなぐときに下の行頭の "# " を消すと有効になる。
     start_event_server(
         lambda: redraw_all(app.client),
         post_photo if os.environ.get("PHOTO_CHANNEL") else None,
@@ -839,6 +880,22 @@ def demo():
         apply_event(rack, events, 99, "in", t)[0] is None
         and apply_event(rack, events, 5, "x", t)[0] is None
     )
+    # まとめて送る（POST /events）: 変化したマスだけ記録し、ほかは理由を返す
+    recorded, notes = apply_events(
+        rack, events, {1: "out", 3: "in", 4: "in", 5: "out"}, t
+    )
+    assert recorded == [(1, "UA", "out"), (3, "UX", "in")]
+    assert notes == {
+        4: "4番のマスは持ち主がいないので記録しません",
+        5: "すでに同じ状態なので記録しません",
+    }
+    assert parse_states({"slots": {"1": "in", "32": "out"}}) == {1: "in", 32: "out"}
+    for bad in [{}, {"slots": {}}, {"slots": [1, 2]}, {"slots": {"x": "in"}}, {"slots": {"1": "in", "2": "maybe"}}]:
+        try:
+            parse_states(bad)
+            assert False, bad
+        except ValueError:
+            pass
     assert slots_summary(rack) == {
         "cols": 3,
         "rows": 2,
