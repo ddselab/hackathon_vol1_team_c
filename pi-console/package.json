@@ -1,0 +1,10 @@
+{
+  "name": "pi-zero-console",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.mjs",
+    "open": "open http://127.0.0.1:8765",
+    "dev": "npm start -- --open"
+  }
+}
