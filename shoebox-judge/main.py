@@ -8,6 +8,7 @@
   python main.py status --camera 0                 全マスの状態を表示
   python main.py                                   対話モード (A1 と入力して判定)
   python main.py watch                             1分に1回撮って全マスを判定し続ける
+  python main.py watch --post                      判定のたびに結果を出席 Bot (POST /events) に送る
   python main.py snapshot rack.jpg                 今のカメラ画像を保存 (マス設定を PC でするとき)
   python main.py gui                               GUI を起動
 入力元は --image ファイル / --camera 番号 / --pi (Raspberry Pi のカメラモジュール)。
@@ -16,14 +17,19 @@
 from __future__ import annotations
 
 import argparse
+import json
 import signal
 import sys
 import time
+import urllib.error
+import urllib.request
+from datetime import datetime
 
 import cv2
 
 from shoebox import (
     CELL_NAMES,
+    COLS,
     CORNER_LABELS,
     PI_CAMERA,
     ShoeBoxDetector,
@@ -31,9 +37,36 @@ from shoebox import (
     format_table,
     load_image,
     normalize_cell,
+    parse_cell,
     quad_center,
     save_image,
 )
+
+
+# 出席 Bot (lab-attendance/bot.py) の受付先。Bot と同じ Pi で動かす前提
+EVENTS_URL = "http://127.0.0.1:8080/events"
+
+
+def slot_number(name: str) -> int:
+    """マス名 → 出席 Bot のマス番号。A1〜A8 = 1〜8、B1 = 9、…、D8 = 32 (左上から右へ、上の段から順)。"""
+    row, col = parse_cell(name)
+    return row * COLS + col + 1
+
+
+def post_states(url: str, results: dict[str, tuple[bool, float]], when: datetime) -> dict:
+    """全マスの判定結果を出席 Bot の POST /events にまとめて送り、Bot の応答 (JSON) を返す。
+
+    毎回全マスを送ってよい (Bot 側で前回と同じ状態のマスは記録しない)。
+    """
+    body = {
+        "time": when.isoformat(timespec="seconds"),
+        "slots": {str(slot_number(name)): "in" if has else "out" for name, (has, _) in results.items()},
+    }
+    req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    # Bot は Slack の画面を描き直してから応答するので、少し長めに待つ
+    with urllib.request.urlopen(req, timeout=30) as res:
+        return json.load(res)
 
 
 def get_source(args) -> str | int:
@@ -217,11 +250,14 @@ def cmd_watch(args):
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     source = get_source(args)
     print(f"{args.interval:g} 秒ごとに判定します (Ctrl+C で終了)", flush=True)
+    if args.post:
+        print(f"判定結果を {args.post} に送ります", flush=True)
     prev = None
     next_at = time.monotonic()
     try:
         while True:
-            stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            now = datetime.now()
+            stamp = now.strftime("%Y-%m-%d %H:%M:%S")
             try:
                 # 毎回読み直すので、動かしたまま「空の状態を登録」やマス設定をし直しても反映される
                 det = ShoeBoxDetector()
@@ -244,6 +280,18 @@ def cmd_watch(args):
                         print("  変化: " + ", ".join(changes), flush=True)
                         print(format_table(results), flush=True)
                 prev = results
+                if args.post:
+                    try:
+                        reply = post_states(args.post, results, now)
+                        if reply.get("recorded"):
+                            slots = ", ".join(map(str, reply["recorded"]))
+                            print(f"  出席 Bot に記録: {slots} 番", flush=True)
+                    except urllib.error.HTTPError as e:
+                        # 400 など: Bot が理由を JSON で返すので表示する
+                        print(f"  出席 Bot に送れませんでした: {e.code} {e.read().decode(errors='replace')}", flush=True)
+                    except (urllib.error.URLError, OSError, ValueError) as e:
+                        # Bot が止まっている等。次の回にまた全マスを送るので、そのまま続ける
+                        print(f"  出席 Bot に送れませんでした: {e}", flush=True)
             # 撮影・判定にかかった時間を差し引いて、間隔がずれていかないようにする
             next_at = max(next_at + args.interval, time.monotonic())
             time.sleep(next_at - time.monotonic())
@@ -279,6 +327,8 @@ def main(argv=None):
     sub.add_parser("status", parents=[src], help="全マスを表示").set_defaults(func=cmd_status)
     p = sub.add_parser("watch", parents=[src], help="一定間隔で撮影して判定し続ける (既定: 60秒ごと)")
     p.add_argument("--interval", type=float, default=60, help="判定の間隔 (秒、既定: 60)")
+    p.add_argument("--post", nargs="?", const=EVENTS_URL, metavar="URL",
+                   help=f"判定のたびに結果を出席 Bot に送る (URL 省略時: {EVENTS_URL})")
     p.set_defaults(func=cmd_watch)
     p = sub.add_parser("snapshot", parents=[src], help="今のカメラ画像をファイルに保存")
     p.add_argument("output", help="保存先 (例: rack.jpg)")

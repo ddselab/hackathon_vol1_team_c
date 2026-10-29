@@ -113,6 +113,7 @@ SSH で `watch` を直接動かすと、SSH を切ったときに止まります
 （ただし撮影が重なると片方が失敗します）。
 
 電源を入れたら自動で動かすには systemd に登録します（パスとユーザー名は自分の環境に合わせる）。
+出席 Bot に送らないなら、`ExecStart` の `--post` を消してください。
 ```
 # /etc/systemd/system/shoebox.service
 [Unit]
@@ -122,7 +123,7 @@ After=multi-user.target
 [Service]
 User=pi
 WorkingDirectory=/home/pi/shoebox
-ExecStart=/usr/bin/python3 -u main.py watch
+ExecStart=/usr/bin/python3 -u main.py watch --post
 Restart=on-failure
 
 [Install]
@@ -132,6 +133,28 @@ WantedBy=multi-user.target
 sudo systemctl enable --now shoebox
 journalctl -u shoebox -f                     # 判定結果を見る
 ```
+
+### 出席 Bot に判定結果を送る
+`--post` を付けると、判定のたびに全マスの結果を出席 Bot（`lab-attendance/bot.py`）の `POST /events` にまとめて送ります。
+```
+python3 main.py watch --post                                  # http://127.0.0.1:8080/events に送る
+python3 main.py watch --post http://127.0.0.1:9000/events     # 送り先を変えるとき
+```
+- マス名は次の番号に変換して送ります（左上から右へ、上の段から順）。Bot の `slots.json` の番号と同じです
+  ```
+       1   2   3   4   5   6   7   8
+   A   1   2   3   4   5   6   7   8
+   B   9  10  11  12  13  14  15  16
+   C  17  18  19  20  21  22  23  24
+   D  25  26  27  28  29  30  31  32
+  ```
+- 送る内容は `{"time": "撮影した時刻", "slots": {"1": "in", "2": "out", …, "32": "out"}}`（くつあり＝`in`、くつなし＝`out`）。
+  毎回全マスを送りますが、Bot は前回と変わったマスだけを記録します。Bot が記録したマスがあれば「出席 Bot に記録: 1, 11 番」と表示します
+- 暗くて判定できなかった回は送りません（間違った「くつなし」で退室扱いにならないように）
+- Bot が止まっている・つながらないときは「出席 Bot に送れませんでした」と出して、判定はそのまま続けます。
+  次の回にまた全マスを送るので、Bot が戻れば状態は追いつきます
+- Bot と同じ Pi で動かす前提です（Bot は `127.0.0.1` でしか受け付けません）。
+  Bot 側の HTTP サーバーを有効にする方法は `lab-attendance/README.md` の「カメラとの連携」を見てください
 
 撮影サイズは `shoebox.py` の `PI_CAMERA_SIZE`（既定 1296x972）で変えられます。
 変えたらマス設定と空の状態の登録をやり直してください。
@@ -168,7 +191,7 @@ python main.py status --image sample_dark.png     # 電気が消えている →
 
 ## ファイル
 - `shoebox.py` … 判定処理の本体
-- `main.py` … コマンドライン（`watch` で定期判定）
+- `main.py` … コマンドライン（`watch` で定期判定、`--post` で出席 Bot に送信）
 - `gui.py` … GUI
 - `config.json` / `empty.png` … マス設定と空の基準画像（自動生成）
 
