@@ -1,0 +1,17 @@
+# Raspberry Pi で Bot を常時実行するための systemd ユーザーサービス
+# 置き場所: ~/.config/systemd/user/lab-attendance.service （手順は README.md の「Raspberry Pi で常時実行する」）
+[Unit]
+Description=lab-attendance Slack bot
+
+[Service]
+WorkingDirectory=%h/lab-attendance
+EnvironmentFile=%h/lab-attendance/.env
+Environment=PYTHONUNBUFFERED=1
+# venv は使わず OS の Python で動かす（パッケージは pip install --user で ~/.local に入れてある）
+ExecStart=/usr/bin/python3 bot.py
+# 落ちたり、起動直後で Wi-Fi がまだつながっていなかったりしても 10 秒後にやり直す
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
