@@ -148,6 +148,33 @@ sudo loginctl enable-linger "$USER"            # SSH でログインしていな
   sudo systemctl daemon-reload
   ```
 
+### コードを更新するとき
+動いているプログラムは起動したときのコードのまま動き続けるので、`.py` ファイルを置き換えただけでは反映されません。
+送ったあとに再起動してください（以下は PC で打ちます）。
+```
+scp main.py shoebox.py pi@raspberrypi.local:shoebox/
+ssh pi@raspberrypi.local "systemctl --user restart shoebox"
+ssh pi@raspberrypi.local "journalctl --user -u shoebox -f"    # エラーが出ていないか確認（Ctrl+C で抜ける）
+```
+コードにエラーがあると、10 秒おきに再起動を繰り返します。ログにエラーが出ていたら直して送り直してください。
+
+変えたものによって、必要な操作が違います。
+
+| 変えたもの | 必要な操作 |
+| --- | --- |
+| `main.py` / `shoebox.py` | `systemctl --user restart shoebox` |
+| `config.json` / `empty.png` | なし（`watch` が毎回読み直す） |
+| `shoebox.service` | `~/.config/systemd/user/` にコピーし直してから `systemctl --user daemon-reload` → `systemctl --user restart shoebox`（`~/shoebox/` に送るだけでは反映されない） |
+
+```
+scp shoebox.service pi@raspberrypi.local:shoebox/
+ssh pi@raspberrypi.local "cp ~/shoebox/shoebox.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user restart shoebox"
+```
+
+> [!CAUTION]
+> コードを送るときに `config.json` や `empty.png` を一緒に送らないでください。Pi 上のマス設定や基準画像が上書きされます
+> （PC の `empty.png` は解像度が違うので、Pi では使えません）。
+
 ### 出席 Bot に判定結果を送る
 `--post` を付けると、判定のたびに全マスの結果を出席 Bot（`lab-attendance/bot.py`）の `POST /events` にまとめて送ります。
 ```
