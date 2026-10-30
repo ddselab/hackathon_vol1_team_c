@@ -125,7 +125,7 @@ ${STOP_PEACE}
 ${STOP_RECORD}
 ${STOP_EYES}
 ${CLEAR_CONSOLE}
-setsid nohup rpicam-hello -t 0 -f --vflip ${options} >/tmp/pi-panel-preview.log 2>&1 </dev/null & echo $! > ${PREVIEW_PID}
+setsid nohup rpicam-hello -t 0 -f ${options} >/tmp/pi-panel-preview.log 2>&1 </dev/null & echo $! > ${PREVIEW_PID}
 sleep 2; ${running(PREVIEW_PID)} && echo started || { tail -3 /tmp/pi-panel-preview.log >&2; exit 1; }`,
   // pi_peace.py が認識に使うのと同じ映像（640×480 / 15fps / 左右反転、プレビューも同じ位置）を H.264 で保存する
   record: `${running(RECORD_PID)} && { echo already recording; exit 0; }
@@ -135,7 +135,7 @@ ${STOP_EYES}
 ${CLEAR_CONSOLE}
 mkdir -p ${DATASET_DIR}/recordings
 file=${DATASET_DIR}/recordings/rec_$(date +%Y%m%d_%H%M%S).h264
-setsid nohup rpicam-vid -t 0 --width 640 --height 480 --framerate 15 --hflip --vflip -p 0,0,800,600 \\
+setsid nohup rpicam-vid -t 0 --width 640 --height 480 --framerate 15 --hflip -p 0,0,800,600 \\
   --codec h264 --bitrate 4000000 --intra 15 -o "$file" >${DATASET_DIR}/record.log 2>&1 </dev/null & echo $! > ${RECORD_PID}
 sleep 2; ${running(RECORD_PID)} && echo "recording: $(basename "$file")" || { tail -3 ${DATASET_DIR}/record.log >&2; exit 1; }`,
   // raspi/pi_eyes.py を Pi の ~/hand-landmarker に置いてある前提
