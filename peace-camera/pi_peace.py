@@ -13,6 +13,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from math import acos, degrees, sqrt
 from pathlib import Path
 
@@ -25,7 +27,8 @@ IDLE_INTERVAL = 1.0  # 手が写っていないときの推論間隔（秒）
 PHOTO_WIDTH, PHOTO_HEIGHT = 2592, 1944
 COUNTDOWN_SECONDS = 3
 MODEL = Path(__file__).parent / "models" / "hand_landmarker.task"
-PHOTO_DIR = Path(__file__).parent / "photos"
+# 撮った写真は保存せず、出席 Bot（lab-attendance/bot.py）の POST /photo に送って Slack に投稿してもらう
+PHOTO_URL = os.environ.get("PHOTO_URL", "http://127.0.0.1:8080/photo")
 SCREEN_W, SCREEN_H = (int(v) for v in Path("/sys/class/graphics/fb0/virtual_size").read_text().split(","))
 PREVIEW_W = SCREEN_H * CAPTURE_W // CAPTURE_H  # 左にプレビュー、右の余白に状態を描く
 ACCENT = (81, 0, 255)  # #ff0051（BGR）
@@ -107,23 +110,21 @@ class Camera:
                 process.wait()
 
     def capture_photo(self):
-        """ライブ映像を一時停止し、最高解像度の JPEG を保存して再開する。"""
-        PHOTO_DIR.mkdir(exist_ok=True)
-        path = PHOTO_DIR / f"peace_{time.strftime('%Y%m%d_%H%M%S')}.jpg"
+        """ライブ映像を一時停止し、最高解像度の JPEG を撮って再開する。ファイルには書かずにバイト列で返す。"""
         with self.control_lock:
             self._stop()
             try:
                 result = subprocess.run(
                     ["rpicam-still", "-n", "-t", "500", "--zsl", "--no-raw",
                      "--width", str(PHOTO_WIDTH), "--height", str(PHOTO_HEIGHT),
-                     "-o", str(path)],
-                    capture_output=True, text=True, timeout=15,
+                     "--encoding", "jpg", "-o", "-"],
+                    capture_output=True, timeout=15,
                 )
-                if result.returncode != 0:
-                    raise RuntimeError(result.stderr.strip() or "rpicam-still failed")
+                if result.returncode != 0 or not result.stdout:
+                    raise RuntimeError(result.stderr.decode(errors="replace").strip() or "rpicam-still failed")
             finally:
                 self._start()
-        return path
+        return result.stdout
 
     @staticmethod
     def requested():
@@ -164,6 +165,7 @@ class Recognition:
         self.hand_count = 0
         self.countdown_started = None
         self.armed = True
+        self.paused = False  # 靴箱判定にカメラを譲っている間
         self.notice = None
         self.notice_until = 0
         self.stop_event = threading.Event()
@@ -175,9 +177,11 @@ class Recognition:
         while not self.stop_event.is_set():
             # 靴箱判定が撮りたがっていたら譲る。カウントダウン中は撮り終えてから譲る
             if self.countdown_started is None and self.camera.requested():
+                self.paused = True
                 self.notice, self.notice_until = "PAUSE", float("inf")
                 self.camera.hand_over(self.stop_event)
                 self.notice_until = 0
+                self.paused = False
                 continue
             started = time.monotonic()
             frame = self.camera.read()
@@ -209,19 +213,38 @@ class Recognition:
                 self.notice = "SHOOT"
                 self.notice_until = float("inf")
                 try:
-                    path = self.camera.capture_photo()
-                    print(f"saved: {path}", flush=True)
-                    self.notice = "SAVED"
+                    photo = self.camera.capture_photo()
+                    print(f"captured: {len(photo)} bytes", flush=True)
+                    self.notice = "SENDING"  # 送り終えるまで出しておく（_send が結果に書き換える）
+                    # Bot は Slack に投稿し終えてから応答するので、待つ間も認識を止めないよう別スレッドで送る
+                    threading.Thread(target=self._send, args=(photo,), daemon=True).start()
                 except Exception as error:
                     print(f"capture failed: {error}", file=sys.stderr, flush=True)
                     self.notice = "ERROR"
-                self.notice_until = time.monotonic() + 2
+                    self.notice_until = time.monotonic() + 2
             else:
                 self.countdown_started = None
                 self.armed = True
                 if self.hand_count == 0:
                     # 誰も写っていないときは推論を間引いて CPU を空ける
                     self.stop_event.wait(max(0, IDLE_INTERVAL - (time.monotonic() - started)))
+
+    def _send(self, photo):
+        request = urllib.request.Request(PHOTO_URL, data=photo, headers={"Content-Type": "image/jpeg"})
+        try:
+            with urllib.request.urlopen(request, timeout=60):
+                pass
+            print("posted", flush=True)
+            notice = "POSTED"
+        except urllib.error.HTTPError as error:  # Bot が返したエラー（not_in_channel など）をそのまま出す
+            print(f"post failed: {error.code} {error.read().decode(errors='replace')}", file=sys.stderr, flush=True)
+            notice = "ERROR"
+        except OSError as error:  # Bot が動いていないなど
+            print(f"post failed: {error}", file=sys.stderr, flush=True)
+            notice = "ERROR"
+        # 送っている間に靴箱判定へカメラを譲っていたら、PAUSE の表示を上書きしない（結果はログに出ている）
+        if not self.paused:
+            self.notice, self.notice_until = notice, time.monotonic() + 2
 
     def stop(self):
         self.stop_event.set()
