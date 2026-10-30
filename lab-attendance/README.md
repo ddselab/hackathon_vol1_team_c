@@ -23,9 +23,6 @@
 | `.env.example` | 環境変数ファイルのひな形。コピーして `.env` を作る（`.env` はコミットしない） |
 | `lab-attendance.service` | Raspberry Pi で常時実行するための systemd の設定 |
 
-> [!WARNING]
-> `bot.py` は `canvas.py`（と、`preview` で使う `board.py`）を import しているが、まだリポジトリに入っていない。これがないと起動できない。
-
 ## Slack アプリの準備
 
 1. <https://api.slack.com/apps> → **Create New App** → **From a manifest** で `manifest.json` の中身を貼り付ける
@@ -119,8 +116,6 @@ ssh $PI "mkdir -p ~/lab-attendance"
 scp lab-attendance/bot.py lab-attendance/canvas.py lab-attendance/requirements.txt `
     lab-attendance/.env.example lab-attendance/lab-attendance.service "${PI}:lab-attendance/"
 ```
-
-`canvas.py` はまだリポジトリにないので、追加されるまでは scp がこのファイルだけエラーになる（ほかのファイルは送られる）。
 
 `slots.json` は **最初の 1 回だけ** 送る（または Pi 上で `python bot.py init 32 8` を実行して作る）。
 

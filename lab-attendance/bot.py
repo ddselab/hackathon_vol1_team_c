@@ -671,9 +671,7 @@ def sample():
 
 
 def preview():
-    import board
-
-    rack, events, now = board.sample()
+    rack, events, now = sample()
     names = {v["user"]: v["name"] for v in rack["slots"].values() if v.get("user")}
     for title, viewer in [("下駄箱がある人", "UE"), ("まだ下駄箱がない人", "UX")]:
         text = json.dumps(
