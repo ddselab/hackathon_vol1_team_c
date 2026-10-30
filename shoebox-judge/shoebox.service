@@ -1,0 +1,18 @@
+# Raspberry Pi で 1 分に 1 回の判定（watch）を常時実行するための systemd ユーザーサービス
+# 置き場所: ~/.config/systemd/user/shoebox.service （手順は README.md の「1分に1回判定する」）
+[Unit]
+Description=Shoebox watcher
+# 出席 Bot に送るので Bot の後に起動する（Bot がなくても動く。送れなかった回は次の回に送り直す）
+After=lab-attendance.service
+
+[Service]
+WorkingDirectory=%h/shoebox
+Environment=PYTHONUNBUFFERED=1
+# 出席 Bot に送らないなら --post を消す
+ExecStart=/usr/bin/python3 main.py watch --post
+# 落ちても 10 秒後にやり直す
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

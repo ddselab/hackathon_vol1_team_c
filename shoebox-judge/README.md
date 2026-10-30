@@ -76,7 +76,7 @@ Pi Lite には画面（GUI）がないので、Pi 側のコマンドは PC か�
 ```
 # 0. コードを Pi に送る（初回とコードを変えたとき）
 ssh pi@raspberrypi.local "mkdir -p ~/shoebox"
-scp main.py shoebox.py pi@raspberrypi.local:shoebox/
+scp main.py shoebox.py shoebox.service pi@raspberrypi.local:shoebox/
 
 # 1. 必要なものを入れて、カメラが見えるか確認
 ssh pi@raspberrypi.local "sudo apt install -y --no-install-recommends rpicam-apps python3-opencv python3-numpy"
@@ -100,7 +100,8 @@ ssh pi@raspberrypi.local "cd ~/shoebox && python3 main.py status"
 - PC にある `empty.png` は Pi に送らないでください（解像度が違うので使えません）。基準画像は 4 で Pi 側に作られます
 - 3 で PC の `config.json` が Pi 用のマス設定に上書きされます。PC 用の設定を残したいときは、先に別名でコピーしておいてください
 - カメラは同時に1つのプログラムしか使えません。`watch` を systemd で動かしている間に `snapshot` や `set-empty` をするときは、
-  先に `ssh pi@raspberrypi.local "sudo systemctl stop shoebox"` で止めてください
+  先に `ssh pi@raspberrypi.local "systemctl --user stop shoebox"` で止めてください
+  （終わったら `systemctl --user start shoebox` で再開）
 
 ### 1分に1回判定する
 ```
@@ -112,27 +113,69 @@ SSH で `watch` を直接動かすと、SSH を切ったときに止まります
 毎回 `config.json` と `empty.png` を読み直すので、動かしたまま「空の状態を登録」をし直しても反映されます
 （ただし撮影が重なると片方が失敗します）。
 
-電源を入れたら自動で動かすには systemd に登録します（パスとユーザー名は自分の環境に合わせる）。
-出席 Bot に送らないなら、`ExecStart` の `--post` を消してください。
+電源を入れたら自動で動かすには、`shoebox.service` を systemd に登録します。
+出席 Bot（`lab-attendance`）と同じく **ユーザーサービス** として登録するので、`sudo` はいりません。
+Pi の電源を入れたら自動で起動し、落ちても 10 秒後に自動で再起動します。
+出席 Bot に送らないなら、`shoebox.service` の `ExecStart` の `--post` を消してから登録してください。
 ```
-# /etc/systemd/system/shoebox.service
-[Unit]
-Description=Shoebox watcher
-After=multi-user.target
+mkdir -p ~/.config/systemd/user
+cp ~/shoebox/shoebox.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now shoebox          # 今すぐ起動し、次回以降も自動で起動する
+sudo loginctl enable-linger "$USER"            # SSH でログインしていなくても動かし続ける（最初の 1 回だけ）
+```
+> `enable-linger` を忘れると、SSH を切った瞬間や再起動後に止まります。出席 Bot の登録で一度やっていれば不要です。
 
-[Service]
-User=pi
-WorkingDirectory=/home/pi/shoebox
-ExecStart=/usr/bin/python3 -u main.py watch --post
-Restart=on-failure
+よく使うコマンド:
 
-[Install]
-WantedBy=multi-user.target
+| やりたいこと | コマンド |
+| --- | --- |
+| 動いているか確認 | `systemctl --user status shoebox` |
+| 判定結果をリアルタイムで見る（Ctrl+C で抜ける） | `journalctl --user -u shoebox -f` |
+| 再起動（コードを変えたあと） | `systemctl --user restart shoebox` |
+| 止める | `systemctl --user stop shoebox` |
+| 自動起動をやめる | `systemctl --user disable --now shoebox` |
+| 出席 Bot と一緒に確認 | `systemctl --user status lab-attendance shoebox` |
+
+注意:
+- `shoebox.service` は `~/shoebox` に置いてある前提です。別の場所に置いたら `WorkingDirectory` を直してください
+- カメラは同時に1つのプログラムしか使えません。ピースカメラ（`pi_peace.py`）とは `/tmp/pi-camera.lock` で譲り合うので、
+  同じ Pi で一緒に動かせます（撮影のたびにピースカメラの映像が 3 秒ほど止まり、画面に `PAUSE` と出ます）。
+  ピースのカウントダウン中は撮り終わるまで最大 15 秒待ち、それでも譲ってもらえなければその回は飛ばします。
+  pi-console の「カメラ」「録画」は譲り合わないので、動かしている間は撮影に失敗します
+- 以前の手順で `/etc/systemd/system/shoebox.service` に登録していたら、二重に動かないように先に消してください
+  ```
+  sudo systemctl disable --now shoebox
+  sudo rm /etc/systemd/system/shoebox.service
+  sudo systemctl daemon-reload
+  ```
+
+### コードを更新するとき
+動いているプログラムは起動したときのコードのまま動き続けるので、`.py` ファイルを置き換えただけでは反映されません。
+送ったあとに再起動してください（以下は PC で打ちます）。
 ```
+scp main.py shoebox.py pi@raspberrypi.local:shoebox/
+ssh pi@raspberrypi.local "systemctl --user restart shoebox"
+ssh pi@raspberrypi.local "journalctl --user -u shoebox -f"    # エラーが出ていないか確認（Ctrl+C で抜ける）
 ```
-sudo systemctl enable --now shoebox
-journalctl -u shoebox -f                     # 判定結果を見る
+コードにエラーがあると、10 秒おきに再起動を繰り返します。ログにエラーが出ていたら直して送り直してください。
+
+変えたものによって、必要な操作が違います。
+
+| 変えたもの | 必要な操作 |
+| --- | --- |
+| `main.py` / `shoebox.py` | `systemctl --user restart shoebox` |
+| `config.json` / `empty.png` | なし（`watch` が毎回読み直す） |
+| `shoebox.service` | `~/.config/systemd/user/` にコピーし直してから `systemctl --user daemon-reload` → `systemctl --user restart shoebox`（`~/shoebox/` に送るだけでは反映されない） |
+
 ```
+scp shoebox.service pi@raspberrypi.local:shoebox/
+ssh pi@raspberrypi.local "cp ~/shoebox/shoebox.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user restart shoebox"
+```
+
+> [!CAUTION]
+> コードを送るときに `config.json` や `empty.png` を一緒に送らないでください。Pi 上のマス設定や基準画像が上書きされます
+> （PC の `empty.png` は解像度が違うので、Pi では使えません）。
 
 ### 出席 Bot に判定結果を送る
 `--post` を付けると、判定のたびに全マスの結果を出席 Bot（`lab-attendance/bot.py`）の `POST /events` にまとめて送ります。
@@ -194,6 +237,7 @@ python main.py status --image sample_dark.png     # 電気が消えている →
 - `main.py` … コマンドライン（`watch` で定期判定、`--post` で出席 Bot に送信）
 - `gui.py` … GUI
 - `config.json` / `empty.png` … マス設定と空の基準画像（自動生成）
+- `shoebox.service` … Raspberry Pi で `watch` を常時実行するための systemd の設定
 
 ## 旧バージョンからの変更
 - 靴箱全体の四隅から自動で 4×8 に等分する方式をやめ、マスごとに四隅を指定する方式にしました。

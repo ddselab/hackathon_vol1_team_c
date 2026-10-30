@@ -193,12 +193,33 @@ sudo loginctl enable-linger "$USER"            # SSH でログインしていな
 
 ### コードを更新するとき
 
-PC で `bot.py` を直したら、送って再起動するだけでよい。
+動いている Bot は起動したときのコードのまま動き続けるので、`.py` ファイルを置き換えただけでは反映されない。
+送ったあとに再起動する（リポジトリのルートで実行する）。
 
 ```sh
-scp lab-attendance/bot.py "$PI":lab-attendance/
+scp lab-attendance/bot.py lab-attendance/canvas.py "$PI":lab-attendance/
 ssh "$PI" 'systemctl --user restart lab-attendance'
+ssh "$PI" 'journalctl --user -u lab-attendance -f'   # エラーが出ていないか確認（Ctrl+C で抜ける）
 ```
+
+コードにエラーがあると、10 秒おきに再起動を繰り返す。ログにエラーが出ていたら直して送り直す。
+
+変えたものによって、必要な操作が違う。
+
+| 変えたもの | 必要な操作 |
+| --- | --- |
+| `bot.py` / `canvas.py` | `systemctl --user restart lab-attendance` |
+| `.env` | `systemctl --user restart lab-attendance`（Pi 上で `nano .env` で直す） |
+| `requirements.txt` | Pi で `pip install --user --break-system-packages -r requirements.txt` → `restart` |
+| `lab-attendance.service` | `~/.config/systemd/user/` にコピーし直してから `systemctl --user daemon-reload` → `restart`（`~/lab-attendance/` に送るだけでは反映されない） |
+
+```sh
+scp lab-attendance/lab-attendance.service "$PI":lab-attendance/
+ssh "$PI" 'cp ~/lab-attendance/lab-attendance.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user restart lab-attendance'
+```
+
+> [!CAUTION]
+> コードを送るときに `slots.json` や `attendance.csv` を一緒に送らないこと。Pi 上の登録内容や出席記録が上書きされて消える（[2. ファイルを Pi に送る](#2-ファイルを-pi-に送る) の注意と同じ）。
 
 ### Pi で動かすときの注意
 

@@ -32,12 +32,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
 import re
 import shutil
 import subprocess
+import time
 import unicodedata
 
 import cv2
@@ -77,6 +79,12 @@ PI_CAMERA = "pi"
 PI_CAMERA_SIZE = (1296, 972)
 # 撮影前に自動露出・ホワイトバランスが落ち着くのを待つ時間 (ミリ秒)
 PI_CAMERA_WAIT_MS = 2000
+# ピースカメラ (pi_peace.py) とカメラを譲り合うためのファイル。同じ Pi・同じユーザーで動かす前提。
+# カメラを使う間は CAMERA_LOCK を flock で握る。CAMERA_REQUEST を置くと pi_peace.py が映像を止めて譲る
+CAMERA_LOCK = "/tmp/pi-camera.lock"
+CAMERA_REQUEST = "/tmp/pi-camera.request"
+# ピースのカウントダウン・撮影中は譲ってもらえないので、それが終わるのを待てる長さにする (秒)
+CAMERA_LOCK_TIMEOUT = 15
 
 DEFAULT_CONFIG = {
     "cells": {},  # {"A1": [[x,y] 左上, 右上, 右下, 左下], ...} 元画像の座標
@@ -116,6 +124,32 @@ def default_source() -> str | int:
     return PI_CAMERA if shutil.which("rpicam-still") else 0
 
 
+@contextlib.contextmanager
+def camera_lock():
+    """ピースカメラにカメラを譲ってもらい、使い終わるまで握っておく。"""
+    import fcntl  # Windows にはないので、Pi で撮るときだけ読み込む
+
+    with open(CAMERA_LOCK, "a") as lock:
+        open(CAMERA_REQUEST, "a").close()
+        try:
+            deadline = time.monotonic() + CAMERA_LOCK_TIMEOUT
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(
+                            "ほかのプログラムがカメラを使っていて、譲ってもらえませんでした"
+                        ) from None
+                    time.sleep(0.2)
+        finally:
+            # 握れたら依頼は取り下げる。ピースカメラはロックが空くのを待って映像を再開する
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(CAMERA_REQUEST)
+        yield  # ロックはファイルを閉じると外れる
+
+
 def capture_pi_camera() -> np.ndarray:
     """rpicam-still で1枚撮り、BGR 画像で返す。
 
@@ -129,12 +163,13 @@ def capture_pi_camera() -> np.ndarray:
     width, height = PI_CAMERA_SIZE
     try:
         # -o - で JPEG を標準出力に書かせ、ファイルを経由せずに受け取る
-        result = subprocess.run(
-            ["rpicam-still", "-n", "-t", str(PI_CAMERA_WAIT_MS),
-             "--width", str(width), "--height", str(height),
-             "--encoding", "jpg", "-q", "95", "-o", "-"],
-            capture_output=True, timeout=30,
-        )
+        with camera_lock():
+            result = subprocess.run(
+                ["rpicam-still", "-n", "-t", str(PI_CAMERA_WAIT_MS),
+                 "--width", str(width), "--height", str(height),
+                 "--encoding", "jpg", "-q", "95", "-o", "-"],
+                capture_output=True, timeout=30,
+            )
     except subprocess.TimeoutExpired:
         raise RuntimeError("Pi のカメラの撮影が時間切れになりました") from None
     if result.returncode != 0:
