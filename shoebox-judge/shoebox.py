@@ -92,6 +92,7 @@ DEFAULT_CONFIG = {
     "min_ratio": 0.30,  # 基準画像(空の状態)と比べてこの割合より暗ければ判定しない
     "min_brightness": 15,  # 明るさ(0-255)がこれ未満なら判定しない
     "min_contrast": 1.5,  # 明るさのばらつきがこれ未満なら判定しない (真っ黒・レンズふさぎ等)
+    "dark_empty_brightness": 12,  # 明るさ(0-255)がこれ未満なら電気が消えているとみなし、全マス「くつなし」
 }
 
 
@@ -435,9 +436,13 @@ class ShoeBoxDetector:
     def detect_all(self, image: np.ndarray) -> dict[str, tuple[bool, float]]:
         """設定済みの全マスの判定結果 {"A1": (くつあり?, スコア), ...} を返す。
 
-        暗すぎるときは TooDarkError を送出する (間違った結果を返さない)。
+        電気が消えているほど暗い (dark_empty_brightness 未満) ときは全マス「くつなし」を返す。
+        それよりは明るいが判定には暗すぎるときは TooDarkError を送出する (間違った結果を返さない)。
         """
         self._require_ready(image)
+        # 電気が消えているほど暗いときは、全員帰ったとみなして全マス「くつなし」にする
+        if self.lighting(image)[0] < float(self.config["dark_empty_brightness"]):
+            return {name: (False, 0.0) for name in CELL_NAMES if name in self.cells}
         cur_mean = self.check_lighting(image)
         ref_mean = self.lighting(self.empty)[0]
         # 今の画像の明るさを基準画像に合わせるための倍率。
