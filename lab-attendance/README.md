@@ -78,7 +78,7 @@ Slack のサイドバーで「出席」アプリを開き、**ホーム** タブ
 [pi-zero-playground](https://github.com/k4nkan/pi-zero-playground) と同じ Raspberry Pi（Pi Zero 2 W、Raspberry Pi OS Lite 64bit、GUI なし）で動かす前提で書いている。
 Bot は Socket Mode で Slack に自分から接続するので、ルーターのポート開放や固定 IP はいらない。Wi-Fi（2.4GHz）でインターネットにつながっていれば動く。
 
-以下の `$PI` は自分の Pi の `ユーザー名@ホスト名` に置き換える（例: `pi@raspberrypi.local`）。
+以下の `$PI` は自分の Pi の `ユーザー名@ホスト名` に置き換える（例: `raspi@ddse.taile6c31a.ts.net`）。
 
 ### 1. SSH でつながるようにする（最初の 1 回）
 
@@ -93,7 +93,7 @@ ssh "$PI" 'echo OK'              # パスワードを聞かれずに OK と出�
 
 ```powershell
 # Windows の PowerShell（ssh-copy-id がないので代わりにこう書く）
-$PI = "pi@raspberrypi.local"
+$PI = "raspi@ddse.taile6c31a.ts.net"
 ssh-keygen -t ed25519
 Get-Content "$env:USERPROFILE\.ssh\id_ed25519.pub" | ssh $PI "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
 ssh $PI "echo OK"

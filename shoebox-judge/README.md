@@ -72,27 +72,27 @@ Pi Lite には画面（GUI）がないので、Pi 側のコマンドは PC か�
 **マスの座標は画素単位なので、必ず Pi のカメラで撮った画像を使ってください。**
 
 以下は PC の PowerShell で打ちます（Windows 11 には `ssh` / `scp` が最初から入っています）。
-`pi@raspberrypi.local` と `~/shoebox` は自分の環境に合わせてください。
+`raspi@ddse.taile6c31a.ts.net` と `~/shoebox` は自分の環境に合わせてください。
 ```
 # 0. コードを Pi に送る（初回とコードを変えたとき）
-ssh pi@raspberrypi.local "mkdir -p ~/shoebox"
-scp main.py shoebox.py shoebox.service pi@raspberrypi.local:shoebox/
+ssh raspi@ddse.taile6c31a.ts.net "mkdir -p ~/shoebox"
+scp main.py shoebox.py shoebox.service raspi@ddse.taile6c31a.ts.net:shoebox/
 
 # 1. 必要なものを入れて、カメラが見えるか確認
-ssh pi@raspberrypi.local "sudo apt install -y --no-install-recommends rpicam-apps python3-opencv python3-numpy"
-ssh pi@raspberrypi.local "rpicam-hello --list-cameras"
+ssh raspi@ddse.taile6c31a.ts.net "sudo apt install -y --no-install-recommends rpicam-apps python3-opencv python3-numpy"
+ssh raspi@ddse.taile6c31a.ts.net "rpicam-hello --list-cameras"
 
 # 2. Pi で撮影 → PC に持ってくる
-ssh pi@raspberrypi.local "cd ~/shoebox && python3 main.py snapshot rack.jpg"
-scp pi@raspberrypi.local:shoebox/rack.jpg .
+ssh raspi@ddse.taile6c31a.ts.net "cd ~/shoebox && python3 main.py snapshot rack.jpg"
+scp raspi@ddse.taile6c31a.ts.net:shoebox/rack.jpg .
 
 # 3. PC でマス設定 → config.json を Pi に送る
 python main.py calibrate --image rack.jpg
-scp config.json pi@raspberrypi.local:shoebox/
+scp config.json raspi@ddse.taile6c31a.ts.net:shoebox/
 
 # 4. 靴箱を空にして、Pi で基準を登録・確認
-ssh pi@raspberrypi.local "cd ~/shoebox && python3 main.py set-empty"
-ssh pi@raspberrypi.local "cd ~/shoebox && python3 main.py status"
+ssh raspi@ddse.taile6c31a.ts.net "cd ~/shoebox && python3 main.py set-empty"
+ssh raspi@ddse.taile6c31a.ts.net "cd ~/shoebox && python3 main.py status"
 ```
 `status` で全マスが「・」（くつなし）になれば準備完了です。
 
@@ -100,7 +100,7 @@ ssh pi@raspberrypi.local "cd ~/shoebox && python3 main.py status"
 - PC にある `empty.png` は Pi に送らないでください（解像度が違うので使えません）。基準画像は 4 で Pi 側に作られます
 - 3 で PC の `config.json` が Pi 用のマス設定に上書きされます。PC 用の設定を残したいときは、先に別名でコピーしておいてください
 - カメラは同時に1つのプログラムしか使えません。`watch` を systemd で動かしている間に `snapshot` や `set-empty` をするときは、
-  先に `ssh pi@raspberrypi.local "systemctl --user stop shoebox"` で止めてください
+  先に `ssh raspi@ddse.taile6c31a.ts.net "systemctl --user stop shoebox"` で止めてください
   （終わったら `systemctl --user start shoebox` で再開）
 
 ### 1分に1回判定する
@@ -109,7 +109,7 @@ python3 main.py watch                        # 60秒ごと (--interval 30 など
 ```
 SSH で `watch` を直接動かすと、SSH を切ったときに止まります。動かし続けるなら下の systemd に登録してください。
 最初に全マスの表を出し、その後は毎回「くつあり ○/32 マス」と、変化があったマスと表を出します。
-暗い・カメラが使えないときはその回だけ「判定できません」と出して、次の回にまた試します。
+電気が消えているほど暗いときは全マス「くつなし」と判定します。それより少し明るいが判定には暗い・カメラが使えないときは、その回だけ「判定できません」と出して、次の回にまた試します。
 毎回 `config.json` と `empty.png` を読み直すので、動かしたまま「空の状態を登録」をし直しても反映されます
 （ただし撮影が重なると片方が失敗します）。
 
@@ -158,9 +158,9 @@ sudo loginctl enable-linger "$USER"            # SSH でログインしていな
 動いているプログラムは起動したときのコードのまま動き続けるので、`.py` ファイルを置き換えただけでは反映されません。
 送ったあとに再起動してください（以下は PC で打ちます）。
 ```
-scp main.py shoebox.py pi@raspberrypi.local:shoebox/
-ssh pi@raspberrypi.local "systemctl --user restart shoebox"
-ssh pi@raspberrypi.local "journalctl --user -u shoebox -f"    # エラーが出ていないか確認（Ctrl+C で抜ける）
+scp main.py shoebox.py raspi@ddse.taile6c31a.ts.net:shoebox/
+ssh raspi@ddse.taile6c31a.ts.net "systemctl --user restart shoebox"
+ssh raspi@ddse.taile6c31a.ts.net "journalctl --user -u shoebox -f"    # エラーが出ていないか確認（Ctrl+C で抜ける）
 ```
 コードにエラーがあると、10 秒おきに再起動を繰り返します。ログにエラーが出ていたら直して送り直してください。
 
@@ -173,8 +173,8 @@ ssh pi@raspberrypi.local "journalctl --user -u shoebox -f"    # エラーが出�
 | `shoebox.service` | `~/.config/systemd/user/` にコピーし直してから `systemctl --user daemon-reload` → `systemctl --user restart shoebox`（`~/shoebox/` に送るだけでは反映されない） |
 
 ```
-scp shoebox.service pi@raspberrypi.local:shoebox/
-ssh pi@raspberrypi.local "cp ~/shoebox/shoebox.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user restart shoebox"
+scp shoebox.service raspi@ddse.taile6c31a.ts.net:shoebox/
+ssh raspi@ddse.taile6c31a.ts.net "cp ~/shoebox/shoebox.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user restart shoebox"
 ```
 
 > [!CAUTION]
@@ -197,7 +197,8 @@ python3 main.py watch --post http://127.0.0.1:9000/events     # 送り先を変�
   ```
 - 送る内容は `{"time": "撮影した時刻", "slots": {"1": "in", "2": "out", …, "32": "out"}}`（くつあり＝`in`、くつなし＝`out`）。
   毎回全マスを送りますが、Bot は前回と変わったマスだけを記録します。Bot が記録したマスがあれば「出席 Bot に記録: 1, 11 番」と表示します
-- 暗くて判定できなかった回は送りません（間違った「くつなし」で退室扱いにならないように）
+- 電気が消えているほど暗い（明るさ `dark_empty_brightness` 未満）ときは、全員帰ったとみなして全マス `out` を送ります
+- それより明るいが判定には暗くて判定できなかった回は送りません（間違った「くつなし」で退室扱いにならないように）
 - Bot が止まっている・つながらないときは「出席 Bot に送れませんでした」と出して、判定はそのまま続けます。
   次の回にまた全マスを送るので、Bot が戻れば状態は追いつきます
 - Bot と同じ Pi で動かす前提です（Bot は `127.0.0.1` でしか受け付けません）。
@@ -213,12 +214,13 @@ copy sample_config.json config.json          # 各マスの四隅を設定
 python main.py set-empty --image sample_empty.png
 python main.py status --image sample_shoes.png    # 普通の状態
 python main.py status --image sample_shadow.png   # 片側に影 → それでも正しく判定
-python main.py status --image sample_dark.png     # 電気が消えている → 「暗すぎて判定できません」
+python main.py status --image sample_dark.png     # 薄暗い → 「暗すぎて判定できません」
 ```
 
 ## 判定の仕組み
 1. 各マスを、指定した四隅で正面向きに補正して切り出します（斜めから撮っていてもOK）
-2. **明るさチェック**：空の状態を登録したときより大幅に暗い（初期値は 30% 未満）、
+2. **明るさチェック**：電気が消えているほど暗い（明るさが初期値 12 未満）ときは、全マス「くつなし」とします。
+   それより明るくても空の状態を登録したときより大幅に暗い（初期値は 30% 未満）、
    または白飛びしているときは、間違った結果を出さないように「判定できません」を返します
 3. **模様の比較**：マスごとに明るさの平均を引いてから、空の状態の画像と模様・形がどれだけ違うかを比べます
    （score：0＝同じ〜1＝別物）。マス単位で明るさを打ち消すので、部屋が少し暗い、片側に影がある、
@@ -235,6 +237,7 @@ python main.py status --image sample_dark.png     # 電気が消えている →
 | `min_ratio` | 0.30 | 空の状態を登録したときと比べ、この割合より暗いと判定しない |
 | `min_brightness` | 15 | 明るさ（0〜255）がこれ未満なら判定しない |
 | `min_contrast` | 1.5 | 画像がほぼ真っ黒（レンズをふさいだ等）なら判定しない |
+| `dark_empty_brightness` | 12 | 明るさ（0〜255）がこれ未満なら電気が消えているとみなし、全マス「くつなし」にする |
 
 ## ファイル
 - `shoebox.py` … 判定処理の本体
