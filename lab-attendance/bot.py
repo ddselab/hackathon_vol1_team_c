@@ -1,20 +1,21 @@
-"""신발장 Slack UI: App Home에 신발장 표(8×4)를 보여주고, 버튼 몇 개로 칸을 등록·관리한다.
+"""下駄箱 Slack UI: App Home に下駄箱の表（8×4）を表示し、いくつかのボタンで下駄箱を登録・管理する。
 
-  python bot.py demo           # 자기 점검
-  python bot.py preview        # 예시 화면을 Block Kit Builder 링크로 출력 (Slack에 로그인된 브라우저에서 열기)
-  python bot.py init 6 3       # slots.json이 없을 때 빈 신발장 만들기 (칸 수, 가로 칸 수)
-  python bot.py                # Socket Mode로 실행 (python -m pip install slack_bolt)
+  python bot.py demo           # 自己テスト
+  python bot.py preview        # 画面例を Block Kit Builder のリンクで出力（Slack にログインしたブラウザで開く）
+  python bot.py init 6 3       # slots.json がないときに空の下駄箱を作る（マス数, 横のマス数）
+  python bot.py                # Socket Mode で起動（python -m pip install slack_bolt）
 
-환경변수: SLACK_BOT_TOKEN (xoxb-, users:read · canvases:write), SLACK_APP_TOKEN (xapp-, connections:write)
-         CANVAS_ID (선택: 있으면 등록이 바뀔 때 캔버스도 갱신), CANVAS_LANG (ja|ko, 기본 ja),
-         APP_HOME_URL (선택: 캔버스 아래 App Home 링크, canvas.py 참고)
-Slack에 보이는 글(App Home·창·오류 문구)은 모두 일본어. 코드 주석과 터미널 메시지는 한국어.
-slots.json은 canvas.py 형식. 이 봇은 칸의 user/name만 바꾼다 (cell/camera는 calibrate.py 몫).
+環境変数: SLACK_BOT_TOKEN (xoxb-, users:read · canvases:write), SLACK_APP_TOKEN (xapp-, connections:write)
+         CANVAS_ID（任意: 設定すると登録が変わったときにキャンバスも更新）, CANVAS_LANG (ja|ko, 既定 ja),
+         APP_HOME_URL（任意: キャンバスの下に出す App Home へのリンク。canvas.py 参照）
+         PHOTO_CHANNEL（任意: POST /photo で受け取った写真を投稿するチャンネル ID。files:write が必要、Bot をチャンネルに招待しておくこと）
+Slack に表示される文言・コードのコメント・ターミナルのメッセージはすべて日本語。
+slots.json は canvas.py の形式。この Bot はマスの user/name だけを変更する（cell/camera は calibrate.py の担当）。
 
-App Home 구성: 제목 → 연구실에 있는 인원 → 신발장 표(칸마다 번호·이름표, 연구실에 있으면 ✅) → 버튼
-  칸이 없는 사람: [칸 등록] → 빈 칸 고르기 + 이름표 입력 창
-  칸이 있는 사람: [이름표 바꾸기] [칸 옮기기] [칸 해제]
-Slack 표(table 블록) 칸에는 글자·이모지만 들어가고 버튼은 못 넣어서, 칸 고르기는 창의 목록으로 한다.
+App Home の構成: タイトル → 在室人数 → 下駄箱の表（マスごとに番号・名札、在室なら ✅） → ボタン
+  下駄箱がない人: [登録する] → 空きマスの選択 + 名札入力のモーダル
+  下駄箱がある人: [名札を変更] [場所を移動] [登録解除]
+Slack の表（table ブロック）のセルには文字・絵文字しか入らずボタンを置けないので、マスの選択はモーダルのリストで行う。
 """
 import json
 import os
@@ -28,17 +29,17 @@ import canvas
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PATH = os.path.join(HERE, "slots.json")
-LOCK = threading.Lock()  # 버튼 처리와 출석 이벤트 처리(POST /event)가 동시에 파일을 만지지 않게
+LOCK = threading.Lock()  # ボタン処理と出席イベント処理（POST /event, /events）が同時にファイルを触らないように
 DAYS = "月火水木金土日"
-# 出席一覧 버튼이 보이는 사람: 마키하라 선생님(Makihara Erina). 시험할 때 환경변수 ATTENDANCE_VIEWERS=U…,U… 로 더할 수 있음
+# 出席一覧ボタンが見える人: 牧原先生（Makihara Erina）。試すときは環境変数 ATTENDANCE_VIEWERS=U…,U… で追加できる
 ATTENDANCE_VIEWERS = {"U0ANRV95TS6"} | {u for u in os.environ.get("ATTENDANCE_VIEWERS", "").split(",") if u}
-NAME_MAX = 16  # 이름표 글자 수. 일본어·영어 이름까지 넉넉하게 (가장 긴 이름표에 맞춰 모든 열이 넓어짐)
+NAME_MAX = 16  # 名札の文字数。日本語・英語の名前まで余裕をもって（表ではマス内で 2 行に折り返す）
 
 
 def button(text, action_id, value="", style=None, confirm=None):
     b = {"type": "button", "text": {"type": "plain_text", "text": text}, "action_id": action_id}
     if value != "":
-        b["value"] = str(value)  # Slack은 빈 value를 넣으면 화면 전체를 거절함
+        b["value"] = str(value)  # Slack は空の value があると画面全体を拒否する
     if style:
         b["style"] = style
     if confirm:
@@ -56,10 +57,10 @@ def empty_slots(rack):
 
 
 def rack_table(rack, last_kind):
-    """신발장 표: 칸 배치 그대로 한 줄에 가로 cols칸. 칸 = 번호(재실이면 ✅) / 이름표 2줄 / 폭 맞춤 줄. 글자는 모두 굵게
-    (Slack이 표 첫 줄을 머리 줄로 굵게 그려서, 나머지 줄도 맞춤. 재실 구분은 ✅만).
-    Slack 표는 칸 크기를 지정할 수 없어서(align·is_wrapped뿐), 줄바꿈을 끄고 이름표를 직접 2줄로 접어(canvas.name_lines)
-    모든 칸을 똑같이 4줄로 만들고, 마지막 줄에 고정 폭 전각 공백 줄을 넣어 열 너비를 맞춘다 → 등록 전후 칸 크기가 같음."""
+    """下駄箱の表: マスの配置どおり 1 行に横 cols マス。マス = 番号（在室なら ✅） / 名札 2 行 / 幅合わせの行。文字はすべて太字
+    （Slack が表の 1 行目をヘッダーとして太字にするので、ほかの行もそろえる。在室の区別は ✅ だけ）。
+    Slack の表はセルの大きさを指定できない（align・is_wrapped だけ）ので、折り返しを切って名札を自分で 2 行に折り（canvas.name_lines）
+    全マスを同じ 4 行にし、最後の行に固定幅の全角スペース行を入れて列幅をそろえる → 登録の前後でマスの大きさが変わらない。"""
     cols = rack.get("cols", 3)
     slots = canvas.owners(rack)
     spacer = "\n" + canvas.SPACE * canvas.PAD
@@ -77,13 +78,13 @@ def rack_table(rack, last_kind):
 
     rows = [[cell(n, u) for n, u in slots[i:i + cols]] for i in range(0, len(slots), cols)]
     blank = {"type": "raw_text", "text": " "}
-    rows[-1] += [blank] * (cols - len(rows[-1]))  # 마지막 줄이 모자라면 빈 셀로 채움
+    rows[-1] += [blank] * (cols - len(rows[-1]))  # 最後の行が足りなければ空セルで埋める
     return {"type": "table", "block_id": "rack", "rows": rows,
             "column_settings": [{"align": "left", "is_wrapped": False}] * cols}
 
 
 def build_home(rack, events, viewer, now, notice=None):
-    """viewer 한 사람에게 보여줄 App Home 블록."""
+    """viewer 1 人に見せる App Home のブロック。"""
     slots = canvas.owners(rack)
     last_kind, _, _ = canvas.today_state(events, now)
     inside = lambda u: last_kind.get(u) == "in"
@@ -114,14 +115,14 @@ def build_home(rack, events, viewer, now, notice=None):
         blocks.append({"type": "actions", "elements": buttons})
     elif has_empty:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "まだ下駄箱が登録されていません。"}})
-        blocks.append({"type": "actions", "elements": [button("登録する", "open_claim", style="primary")]})  # 名札を変更と같은 왼쪽 자리
+        blocks.append({"type": "actions", "elements": [button("登録する", "open_claim", style="primary")]})  # 「名札を変更」と同じ左端の位置
     else:
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "まだ下駄箱が登録されていません。現在、空いている下駄箱はありません。"}})
     return blocks
 
 
 def claim_modal(rack, viewer, default_name=""):
-    """빈 칸을 고르는 창. 칸이 없는 사람은 이름표도 같이 입력, 칸이 있는 사람은 옮기기."""
+    """空きマスを選ぶモーダル。下駄箱がない人は名札も一緒に入力、ある人は移動。"""
     cols = rack.get("cols", 3)
     moving = any(v.get("user") == viewer for v in rack["slots"].values())
     options = [{"text": {"type": "plain_text", "text": f"{n}番（上から{(n - 1) // cols + 1}段目）"}, "value": str(n)}
@@ -152,7 +153,7 @@ def name_problem(name):
 
 
 def change(rack, events, now, user, name, action, n):
-    """칸 등록·옮기기·해제. rack을 바꾸고 None을 돌려주거나, 막히면 이유를 돌려준다."""
+    """マスの登録・移動・解除。rack を変更して None を返すか、できなければ理由を返す。"""
     slots, key = rack["slots"], str(n)
     if key not in slots:
         return "存在しない番号です。"
@@ -165,20 +166,20 @@ def change(rack, events, now, user, name, action, n):
         if mine and inside:
             return "靴が入っている間は移動できません。"
         if mine:
-            name = slots[mine].get("name") or name  # 옮겨도 이름표는 그대로
+            name = slots[mine].get("name") or name  # 移動しても名札はそのまま
             slots[mine]["user"] = None
             slots[mine].pop("name", None)
         slots[key].update(user=user, name=name.strip()[:NAME_MAX])
     elif action == "release":
         if slots[key].get("user") != user:
             return "自分の下駄箱のみ解除できます。"
-        slots[key]["user"] = None  # 신발이 들어가 있어도 해제 가능 (그때 퇴실 기록은 release 처리에서 남김)
+        slots[key]["user"] = None  # 靴が入っていても解除できる（そのときの退室記録は release の処理で残す）
         slots[key].pop("name", None)
     return None
 
 
 def rename(rack, user, name):
-    """이름표 바꾸기. 바꾸면 None, 막히면 이유."""
+    """名札の変更。変更できたら None、できなければ理由。"""
     why = name_problem(name)
     if why:
         return why
@@ -190,11 +191,11 @@ def rename(rack, user, name):
 
 
 def md(text):
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")  # 이름표가 Slack 서식·멘션을 못 만들게
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")  # 名札で Slack の書式・メンションを作れないように
 
 
 def attendance_modal(rack, events, now):
-    """출석 일괄 확인 창: 칸 주인을 재실 / 부재로 나눠 칸 번호·이름표로 보여줌."""
+    """出席一覧のモーダル: マスの持ち主を在室 / 不在に分けて、番号・名札で表示する。"""
     last_kind, _, _ = canvas.today_state(events, now)
     people = [(n, rack["slots"][str(n)].get("name") or "?", last_kind.get(u) == "in") for n, u in canvas.owners(rack) if u]
     group = lambda here: "\n".join(f"{n:02d}  {md(name)}" for n, name, h in people if h == here) or "—"
@@ -220,7 +221,7 @@ def rename_modal(current):
 
 
 def submit_claim(rack, events, now, user, values):
-    """칸 등록 창의 입력값 처리. (오류가 난 입력칸 이름, 이유) 또는 None."""
+    """登録モーダルの入力値を処理。（エラーの入力欄の名前, 理由）または None。"""
     n = int(values["slot"]["value"]["selected_option"]["value"])
     name = values.get("name", {}).get("value", {}).get("value")
     if "name" in values:
@@ -232,33 +233,60 @@ def submit_claim(rack, events, now, user, values):
 
 
 
-# ── 카메라 쪽에서 출석 정보 받기 ────────────────────────────────────────────
-# 약속: 카메라 쪽은 '몇 번 칸에 신발이 들어왔다/나갔다'만 보낸다. 누구 칸인지는 이 봇이 slots.json에서 찾는다.
-#   POST /event  {"slot": 12, "event": "in", "time": "2026-10-26T09:12:00"}   time은 빼도 됨 → 받은 시각으로 기록
-#   GET  /slots  {"cols": 8, "rows": 4, "used": [1, 3, 12]}                    이름·Slack ID는 주지 않음
-# 흔들림 방지(입장 10초·퇴실 2분 유지)는 카메라 쪽 몫. 이 봇은 확정된 변화만 받는다고 가정한다.
+# ── カメラ側から出席情報を受け取る ──────────────────────────────────────────
+# 取り決め: カメラ側は「何番のマスに靴が入った／出た」だけを送る。誰のマスかはこの Bot が slots.json から調べる。
+#   POST /event  {"slot": 12, "event": "in", "time": "2026-10-26T09:12:00"}   time は省略可 → 受け取った時刻で記録
+#   POST /events {"slots": {"1": "in", "2": "out", ..., "32": "out"}, "time": ...}   複数マスを 1 回でまとめて送る
+#   GET  /slots  {"cols": 8, "rows": 4, "used": [1, 3, 12]}                    名前・Slack ID は返さない
+#   POST /photo  本文 = JPEG そのまま（Content-Type: image/jpeg）              PHOTO_CHANNEL のチャンネルに投稿
+# チャタリング対策（入室 10 秒・退室 2 分の維持）はカメラ側の担当。この Bot は確定した変化だけを受け取る前提。
 CSV = os.path.join(HERE, "attendance.csv")
 EVENT_PORT = int(os.environ.get("EVENT_PORT", "8080"))
+PHOTO_MAX = 20 * 1024 * 1024  # 2592×1944 の JPEG は普通 2〜4MB。これより大きければ誤送信とみなして拒否
 
 
 def apply_event(rack, events, slot, kind, when):
-    """출석 이벤트 하나를 판단. (기록할 사람 ID, None) 또는 (None, 기록하지 않는 이유)."""
+    """出席イベント 1 件を判定。（記録する人の ID, None）または（None, 記録しない理由）。"""
     if kind not in ("in", "out"):
-        return None, "event는 in 또는 out이어야 해요"
+        return None, "event は in か out にしてください"
     key = str(slot)
     if key not in rack["slots"]:
-        return None, f"{slot}번 칸은 없어요"
+        return None, f"{slot}番のマスはありません"
     user = rack["slots"][key].get("user")
     if not user:
-        return None, f"{slot}번 칸은 주인이 없어서 기록하지 않아요"
+        return None, f"{slot}番のマスは持ち主がいないので記録しません"
     last_kind, _, _ = canvas.today_state(events, when)
-    if last_kind.get(user, "out") == kind:  # 이미 같은 상태 (예: 오늘 기록 없는 사람에게 또 out)
-        return None, "이미 같은 상태라 기록하지 않아요"
+    if last_kind.get(user, "out") == kind:  # すでに同じ状態（例: 今日記録のない人にまた out）
+        return None, "すでに同じ状態なので記録しません"
     return user, None
 
 
+def apply_events(rack, events, states, when):
+    """複数マスの状態をまとめて判定。（記録する [(マス番号, 人の ID, in/out)], {マス番号: 記録しない理由}）。"""
+    recorded, notes = [], {}
+    for slot, kind in sorted(states.items()):
+        user, why = apply_event(rack, events, slot, kind, when)
+        if user:
+            recorded.append((slot, user, kind))
+        else:
+            notes[slot] = why
+    return recorded, notes
+
+
+def parse_states(body):
+    """POST /events の本文から {マス番号: "in" か "out"} を取り出す。形式が違えば ValueError。"""
+    slots = body.get("slots")
+    if not isinstance(slots, dict) or not slots:
+        raise ValueError('slots に {"マス番号": "in" か "out"} を入れてください')
+    states = {int(k): v for k, v in slots.items()}
+    bad = [k for k, v in states.items() if v not in ("in", "out")]
+    if bad:  # 1 つでもおかしければ、どのマスも記録しない
+        raise ValueError(f"{bad}番の値は in か out にしてください")
+    return states
+
+
 def append_attendance(path, when, user, kind):
-    """attendance.csv 끝에 한 줄 추가. 파일이 없으면 머리줄부터 만든다."""
+    """attendance.csv の末尾に 1 行追加。ファイルがなければヘッダー行から作る。"""
     new = not os.path.exists(path)
     with open(path, "a", encoding="utf-8", newline="") as f:
         if new:
@@ -267,14 +295,14 @@ def append_attendance(path, when, user, kind):
 
 
 def slots_summary(rack):
-    """GET /slots 응답: 칸 배치와 '주인 있는 칸 번호'만 (이름·ID는 카메라 쪽에 필요 없음)."""
+    """GET /slots の応答: マスの配置と「持ち主がいるマスの番号」だけ（名前・ID はカメラ側に不要）。"""
     slots = canvas.owners(rack)
     cols = rack.get("cols", 3)
     return {"cols": cols, "rows": -(-len(slots) // cols), "used": [n for n, u in slots if u]}
 
 
-def start_event_server(on_change, port=EVENT_PORT):
-    """카메라 쪽 요청을 받는 작은 HTTP 서버를 봇과 함께 돌린다. 127.0.0.1 = 같은 기기(라즈베리파이) 안에서만 접속 가능."""
+def start_event_server(on_change, on_photo=None, port=EVENT_PORT):
+    """カメラ側のリクエストを受ける小さな HTTP サーバーを Bot と一緒に動かす。127.0.0.1 = 同じ機器（Raspberry Pi）の中からだけ接続できる。"""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     class Handler(BaseHTTPRequestHandler):
@@ -288,34 +316,56 @@ def start_event_server(on_change, port=EVENT_PORT):
 
         def do_GET(self):
             if self.path != "/slots":
-                return self.reply(404, {"ok": False, "error": "GET은 /slots만 있어요"})
+                return self.reply(404, {"ok": False, "error": "GET は /slots だけです"})
             rack, _ = canvas.load(HERE)
             self.reply(200, slots_summary(rack))
 
         def do_POST(self):
-            if self.path != "/event":
-                return self.reply(404, {"ok": False, "error": "POST는 /event만 있어요"})
+            if self.path == "/photo":
+                return self.photo()
+            if self.path not in ("/event", "/events"):
+                return self.reply(404, {"ok": False, "error": "POST は /event, /events, /photo だけです"})
+            single = self.path == "/event"
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-                slot, kind = int(body["slot"]), body["event"]
+                states = {int(body["slot"]): body["event"]} if single else parse_states(body)
                 when = datetime.fromisoformat(body["time"]) if body.get("time") else datetime.now()
-            except (ValueError, KeyError, TypeError) as e:
-                return self.reply(400, {"ok": False, "error": f"형식이 틀렸어요: {e!r}"})
-            with LOCK:  # 버튼 처리와 동시에 파일을 만지지 않게
-                rack, events = canvas.load(HERE, when.date())  # 카메라가 보낸 시각의 날짜 기준 (자정 직전 이벤트 대비)
-                user, why = apply_event(rack, events, slot, kind, when)
-                if user:
+            except (ValueError, KeyError, TypeError, AttributeError) as e:
+                return self.reply(400, {"ok": False, "error": f"形式が正しくありません: {e!r}"})
+            with LOCK:  # ボタン処理と同時にファイルを触らないように
+                rack, events = canvas.load(HERE, when.date())  # カメラが送った時刻の日付で読む（日付が変わる直前のイベント対策）
+                recorded, notes = apply_events(rack, events, states, when)
+                for _, user, kind in recorded:
                     append_attendance(CSV, when, user, kind)
-            if user:
-                on_change()  # 표 다시 그리기
-            self.reply(200, {"ok": True, "recorded": bool(user), "note": why})
+            if recorded:
+                on_change()  # 何マス変わっても表の描き直しは 1 回だけ
+            if single:
+                return self.reply(200, {"ok": True, "recorded": bool(recorded), "note": next(iter(notes.values()), None)})
+            self.reply(200, {"ok": True, "recorded": [slot for slot, _, _ in recorded],
+                             "notes": {str(slot): why for slot, why in notes.items()}})
+
+        def photo(self):
+            if not on_photo:
+                return self.reply(503, {"ok": False, "error": "PHOTO_CHANNEL が設定されていません"})
+            size = int(self.headers.get("Content-Length", 0))
+            if not 0 < size <= PHOTO_MAX:
+                return self.reply(400, {"ok": False, "error": f"写真のサイズがおかしいです: {size}バイト"})
+            data = self.rfile.read(size)
+            if not data.startswith(b"\xff\xd8"):  # JPEG の先頭マーカー
+                return self.reply(400, {"ok": False, "error": "JPEG ではありません"})
+            try:
+                on_photo(data)
+            except Exception as e:  # Slack 側のエラー（not_in_channel など）はそのままカメラ側に返す
+                print(f"写真の投稿に失敗: {e!r}")
+                return self.reply(502, {"ok": False, "error": f"Slack に投稿できませんでした: {e!r}"})
+            self.reply(200, {"ok": True})
 
         def log_message(self, *args):
-            pass  # 요청마다 터미널에 찍히는 접속 기록은 끔
+            pass  # リクエストごとにターミナルへ出るアクセスログは止める
 
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()  # 봇과 따로 돌도록 별도 스레드
-    print(f"출석 정보 받는 중: http://127.0.0.1:{port}/event")
+    threading.Thread(target=server.serve_forever, daemon=True).start()  # Bot とは別スレッドで動かす
+    print(f"出席情報の受付中: http://127.0.0.1:{port}/event")
     return server
 
 
@@ -324,24 +374,24 @@ def run():
     from slack_bolt.adapter.socket_mode import SocketModeHandler
 
     if not os.path.exists(PATH):
-        sys.exit("slots.json이 없어요. 먼저 python bot.py init <칸 수> <가로 칸 수> 를 실행하세요.")
+        sys.exit("slots.json がありません。先に python bot.py init <マス数> <横のマス数> を実行してください。")
     canvas.use_certifi()
     app = App(token=os.environ["SLACK_BOT_TOKEN"])
-    # ponytail: App Home을 연 사람 목록은 메모리에만 둠. 재시작하면 각자 다시 열 때 채워짐
+    # ponytail: App Home を開いた人の一覧はメモリにだけ持つ。再起動したら各自が開き直したときに埋まる
     seen = set()
-    shown = {}  # 사람별 마지막으로 보낸 화면 (기준 시각 줄 제외)
+    shown = {}  # 人ごとに最後に送った画面（「○時点」の行は除く）
 
     def publish(client, user, notice=None, force=False):
-        """화면 내용이 지난번과 같으면 안 보냄: 보던 화면이 이유 없이 새로 그려지면 스크롤이 처음으로 돌아가고 칸이 튐."""
+        """画面の内容が前回と同じなら送らない: 見ている画面が理由なく描き直されると、スクロールが先頭に戻りマスがちらつく。"""
         rack, events = canvas.load(HERE)
         blocks = build_home(rack, events, user, datetime.now(), notice)
-        if not force and shown.get(user) == blocks[2:]:  # blocks[1]은 '○時点' 줄이라 매분 바뀌므로 비교에서 뺌
+        if not force and shown.get(user) == blocks[2:]:  # blocks[1] は「○時点」の行で毎分変わるので比較から外す
             return
         shown[user] = blocks[2:]
         client.views_publish(user_id=user, view={"type": "home", "blocks": blocks})
 
     def redraw_all(client, user=None, why=None):
-        """캔버스를 새로 하고, 열어 본 사람 모두의 홈 화면을 다시 그림. why(거절 이유)는 누른 사람 화면에만."""
+        """キャンバスを更新し、開いたことのある全員のホーム画面を描き直す。why（拒否理由）は押した人の画面にだけ出す。"""
         if not why and os.environ.get("CANVAS_ID"):
             rack, events = canvas.load(HERE)
             canvas.update_canvas(canvas.render(rack, events, os.environ.get("CANVAS_LANG", "ja"), datetime.now(),
@@ -352,25 +402,36 @@ def run():
             publish(client, u, why if u == user else None)
 
     def after_change(client, user, why):
-        """버튼으로 등록이 바뀌었을 때 (빈 칸 여부가 달라지므로 모두 다시 그림)."""
+        """ボタンで登録が変わったとき（空きマスの有無が変わるので全員分描き直す）。"""
         redraw_all(client, user, why)
 
     def display_name(client, user):
         profile = client.users_info(user=user)["user"]
         return profile["profile"].get("display_name") or profile.get("real_name") or ""
 
-    # 카메라 쪽 출석 정보 받기 (POST /event, GET /slots). 카메라와 연결할 때 아래 줄 맨 앞의 "# "를 지우면 켜진다.
-    start_event_server(lambda: redraw_all(app.client))
+    def post_photo(data):
+        """カメラで撮った写真を PHOTO_CHANNEL に投稿する。"""
+        now = datetime.now()
+        app.client.files_upload_v2(
+            channel=os.environ["PHOTO_CHANNEL"],
+            file=data,
+            filename=f"photo_{now:%Y%m%d_%H%M%S}.jpg",
+            initial_comment=f"📸 {now.month}/{now.day} ({DAYS[now.weekday()]}) {now:%H:%M}",
+            request_file_info=False,  # True だと files:read 権限も必要になる
+        )
+
+    # カメラ側から出席情報・写真を受け取る（POST /event, POST /events, GET /slots, POST /photo）
+    start_event_server(lambda: redraw_all(app.client), post_photo if os.environ.get("PHOTO_CHANNEL") else None)
 
     @app.event("app_home_opened")
     def opened(event, client):
         if event.get("tab") == "home":
             seen.add(event["user"])
-            publish(client, event["user"], force=True)  # 열 때는 기준 시각도 새로
+            publish(client, event["user"], force=True)  # 開いたときは「○時点」も新しくする
 
     @app.action("open_claim")
     def open_claim(ack, body, client):
-        ack()  # 3초 안에 응답해야 하므로 먼저 받았다고 알림
+        ack()  # 3 秒以内に応答する必要があるので、先に受け取ったことを知らせる
         user = body["user"]["id"]
         rack, _ = canvas.load(HERE)
         if not empty_slots(rack):
@@ -382,12 +443,12 @@ def run():
     def save_claim(ack, body, view, client):
         user = body["user"]["id"]
         with LOCK:
-            rack, events = canvas.load(HERE)  # 쓰기 직전에 다시 읽어 calibrate.py가 바꾼 cell을 지우지 않음
+            rack, events = canvas.load(HERE)  # 書き込む直前に読み直して、calibrate.py が変えた cell を消さない
             problem = submit_claim(rack, events, datetime.now(), user, view["state"]["values"])
             if not problem:
                 canvas.write_json(PATH, rack)
         if problem:
-            ack(response_action="errors", errors={problem[0]: problem[1]})  # 입력칸 아래에 이유 표시, 창은 그대로
+            ack(response_action="errors", errors={problem[0]: problem[1]})  # 入力欄の下に理由を表示、モーダルはそのまま
             return
         ack()
         after_change(client, user, None)
@@ -403,14 +464,14 @@ def run():
             why = change(rack, events, now, user, "", "release", int(action["value"]))
             if not why:
                 canvas.write_json(PATH, rack)
-                if was_in:  # 신발이 든 채로 해제: 칸 주인이 없어져 카메라 퇴실이 안 잡히므로 여기서 퇴실로 기록
+                if was_in:  # 靴が入ったまま解除: 持ち主がいなくなりカメラで退室を拾えないので、ここで退室として記録
                     append_attendance(CSV, now, user, "out")
         after_change(client, user, why)
 
     @app.action("show_attendance")
     def show_attendance(ack, body, client):
         ack()
-        if body["user"]["id"] not in ATTENDANCE_VIEWERS:  # 버튼은 안 보이지만, 받는 쪽에서도 한 번 더 막음
+        if body["user"]["id"] not in ATTENDANCE_VIEWERS:  # ボタンは見えないが、受け取る側でも念のため弾く
             return
         rack, events = canvas.load(HERE)
         client.views_open(trigger_id=body["trigger_id"], view=attendance_modal(rack, events, datetime.now()))
@@ -440,9 +501,9 @@ def run():
 
 
 def sample():
-    """예시 신발장: 1번 김민준(재실), 2번 이서연(퇴실), 4번 최유찬, 3·5·6번 빈 칸."""
-    rack = {"cols": 3, "slots": {"1": {"user": "UA", "name": "김민준"}, "2": {"user": "UB", "name": "이서연"},
-                                 "3": {"user": None}, "4": {"user": "U0BGU875SSJ", "name": "최유찬"},
+    """下駄箱の例: 1番 佐藤健（在室）、2番 鈴木花子（退室）、4番 田中翔、3・5・6番は空き。"""
+    rack = {"cols": 3, "slots": {"1": {"user": "UA", "name": "佐藤健"}, "2": {"user": "UB", "name": "鈴木花子"},
+                                 "3": {"user": None}, "4": {"user": "U0BGU875SSJ", "name": "田中翔"},
                                  "5": {"user": None}, "6": {"user": None}}}
     d = lambda h, m: datetime(2026, 10, 26, h, m)
     events = [(d(8, 40), "UA", "in"), (d(9, 0), "UB", "in"), (d(12, 10), "UB", "out")]
@@ -453,7 +514,7 @@ def preview():
     import board
     rack, events, now = board.sample()
     names = {v["user"]: v["name"] for v in rack["slots"].values() if v.get("user")}
-    for title, viewer in [("칸이 있는 사람(윤도현)", "UE"), ("아직 칸이 없는 사람", "UX")]:
+    for title, viewer in [("下駄箱がある人", "UE"), ("まだ下駄箱がない人", "UX")]:
         text = json.dumps({"type": "home", "blocks": build_home(rack, events, viewer, now)}, ensure_ascii=False)
         for u, nm in names.items():
             text = text.replace(f"<@{u}>", nm)
@@ -465,111 +526,122 @@ def demo():
     me = "U0BGU875SSJ"
     all_ids = lambda blocks: [e["action_id"] for b in blocks
                               for e in (b["elements"] if b["type"] == "actions" else [b["accessory"]] if "accessory" in b else [])]
-    ids = lambda blocks: [i for i in all_ids(blocks) if i != "show_attendance"]  # 出席一覧은 아래에서 따로 점검
+    ids = lambda blocks: [i for i in all_ids(blocks) if i != "show_attendance"]  # 出席一覧は下で別に確認
     text = lambda blocks: json.dumps(blocks, ensure_ascii=False)
 
-    # 칸이 없는 사람: 신발장 표 + [칸 등록] 버튼 하나뿐
+    # 下駄箱がない人: 下駄箱の表 + [登録する] ボタンだけ
     home = build_home(rack, events, "UX", now)
     assert "在室 *1*/3人 · ✅ = 在室" in text(home)
     table = home[2]
     assert table["type"] == "table" and len(table["rows"]) == 2 and all(len(r) == 3 for r in table["rows"])
     cell_text = lambda c: "".join(e.get("text", ":" + e.get("name", "") + ":") for e in c["elements"][0]["elements"])
     S = canvas.SPACE
-    sp = "\n" + S * canvas.PAD  # 칸 폭은 이름과 상관없이 고정
-    assert [cell_text(c) for c in table["rows"][0]] == ["01 :white_check_mark:\n김민준\n" + S + sp, "02\n이서연\n" + S + sp,
-                                                        "03\n" + S + "\n" + S + sp]  # 1번만 재실, 빈 칸도 4줄
+    sp = "\n" + S * canvas.PAD  # マスの幅は名前に関係なく固定
+    assert [cell_text(c) for c in table["rows"][0]] == ["01 :white_check_mark:\n佐藤健\n" + S + sp, "02\n鈴木花子\n" + S + sp,
+                                                        "03\n" + S + "\n" + S + sp]  # 1番だけ在室、空きマスも 4 行
     assert all(e.get("style") == {"bold": True} for r in table["rows"] for c in r
-               for e in c["elements"][0]["elements"] if e["type"] == "text")  # 모든 줄·칸 글자 굵게 (첫 줄 머리 줄과 같게)
-    assert [cell_text(c) for c in table["rows"][1]] == ["04\n최유찬\n" + S + sp, "05\n" + S + "\n" + S + sp,
+               for e in c["elements"][0]["elements"] if e["type"] == "text")  # すべての行・マスの文字が太字（1 行目のヘッダーと同じ）
+    assert [cell_text(c) for c in table["rows"][1]] == ["04\n田中翔\n" + S + sp, "05\n" + S + "\n" + S + sp,
                                                         "06\n" + S + "\n" + S + sp]
-    assert all(cs["is_wrapped"] is False for cs in table["column_settings"])  # 줄바꿈 끔 = 모든 칸 4줄 고정
+    assert all(cs["is_wrapped"] is False for cs in table["column_settings"])  # 折り返しなし = 全マス 4 行固定
     long = rack_table({"cols": 2, "slots": {"1": {"user": "UA", "name": "Choi Youchan"}, "2": {"user": None}}}, {})
-    assert cell_text(long["rows"][0][0]) == "01\nChoi\nYouchan" + sp  # 전체 이름이 칸 안에 2줄로
-    assert cell_text(long["rows"][0][1]) == "02\n" + S + "\n" + S + sp  # 빈 칸도 같은 줄 수·폭 = 등록 전후 칸 크기 같음
-    assert len(json.dumps(table, ensure_ascii=False)) < 10000  # Slack 표는 칸 글자 합계 1만 자 제한
+    assert cell_text(long["rows"][0][0]) == "01\nChoi\nYouchan" + sp  # 名前全体がマス内に 2 行で入る
+    assert cell_text(long["rows"][0][1]) == "02\n" + S + "\n" + S + sp  # 空きマスも同じ行数・幅 = 登録の前後でマスの大きさが同じ
+    assert len(json.dumps(table, ensure_ascii=False)) < 10000  # Slack の表はセルの文字数合計 1 万字まで
     five = build_home({"cols": 3, "slots": {str(k): {"user": None} for k in range(1, 6)}}, [], "UX", now)[2]
-    assert five["rows"][1][2] == {"type": "raw_text", "text": " "}  # 칸이 모자란 마지막 줄은 빈 셀로 채움
+    assert five["rows"][1][2] == {"type": "raw_text", "text": " "}  # マスが足りない最後の行は空セルで埋める
     assert ids(home) == ["open_claim"] and home[-1]["type"] == "actions" and home[-1]["elements"][0]["style"] == "primary"
     longhome = build_home({"cols": 2, "slots": {"1": {"user": "UA", "name": "Alexander Smith"}, "2": {"user": None}}}, [], "UX", now)
-    assert ids(longhome) == ["open_claim"]  # 표 아래 풀네임 목록 없음 (풀네임은 칸 안에서)
-    # Slack은 빈 글자 value가 하나라도 있으면 화면 전체를 거절함 (실제로 views.publish가 invalid_arguments로 실패했음)
+    assert ids(longhome) == ["open_claim"]  # 表の下にフルネームの一覧はない（フルネームはマス内に表示）
+    # Slack は空文字の value が 1 つでもあると画面全体を拒否する（実際に views.publish が invalid_arguments で失敗した）
     full_rack = {"cols": 2, "slots": {"1": {"user": "UA", "name": "A"}, "2": {"user": "UB", "name": "B"}}}
     for viewer, r in [("UX", rack), (me, rack), ("UA", rack), ("UX", full_rack), ("UB", full_rack)]:
         assert '"value": ""' not in text(build_home(r, events, viewer, now)), viewer
-    assert not re.search(r"\d\d:\d\d[~]|~\d\d:\d\d", text(home))  # 입장·퇴실 시각 없음
+    assert not re.search(r"\d\d:\d\d[~]|~\d\d:\d\d", text(home))  # 入室・退室の時刻は出さない
     later = now.replace(minute=now.minute + 5)
-    assert home[1] != build_home(rack, events, "UX", later)[1] and home[2:] == build_home(rack, events, "UX", later)[2:]  # 시각은 blocks[1]에만 (publish의 '안 바뀌면 안 보냄' 비교가 이걸 믿음)
+    assert home[1] != build_home(rack, events, "UX", later)[1] and home[2:] == build_home(rack, events, "UX", later)[2:]  # 時刻は blocks[1] にだけ（publish の「変わらなければ送らない」比較がこれを前提にしている）
 
-    # 出席一覧: 마키하라 선생님에게만 표 바로 아래 버튼, 창에 재실/부재를 칸 번호·이름표로
+    # 出席一覧: 牧原先生にだけ表のすぐ下にボタン、モーダルに在室/不在を番号・名札で表示
     assert build_home(rack, events, "U0ANRV95TS6", now)[3]["elements"][0]["action_id"] == "show_attendance"
     for viewer in ("UX", me, "UA"):
         assert "show_attendance" not in all_ids(build_home(rack, events, viewer, now)), viewer
     att = text(attendance_modal(rack, events, now))
-    assert "✅ 在室 1人*\\n01  김민준" in att and "不在 2人*\\n02  이서연\\n04  최유찬" in att
-    assert "&lt;@U1&gt;" in text(attendance_modal({"slots": {"1": {"user": "UA", "name": "<@U1>"}}}, [], now))  # 멘션 못 만듦
+    assert "✅ 在室 1人*\\n01  佐藤健" in att and "不在 2人*\\n02  鈴木花子\\n04  田中翔" in att
+    assert "&lt;@U1&gt;" in text(attendance_modal({"slots": {"1": {"user": "UA", "name": "<@U1>"}}}, [], now))  # メンションを作れない
     assert "在室 0人*\\n—" in text(attendance_modal({"slots": {"1": {"user": None}}}, [], now))
 
-    # 칸이 있는 사람: 이름표 바꾸기 / 칸 옮기기 / 칸 해제(확인창)
+    # 下駄箱がある人: 名札を変更 / 場所を移動 / 登録解除（確認ダイアログ付き）
     home = build_home(rack, events, me, now)
-    assert "あなたの下駄箱は *4番*、名札は *최유찬*" in text(home)
+    assert "あなたの下駄箱は *4番*、名札は *田中翔*" in text(home)
     assert ids(home) == ["rename", "open_claim", "release_4"] and "confirm" in home[-1]["elements"][2]
 
-    # 신발이 칸에 있는 사람: 이름표 바꾸기 + 해제 (옮기기만 막힘)
+    # 靴が入っている人: 名札を変更 + 登録解除（移動だけできない）
     home = build_home(rack, events, "UA", now)
     assert ids(home) == ["rename", "release_1"] and "移動できません" in text(home) and "解除" not in home[-2]["elements"][0]["text"]
 
-    # 빈 칸이 없으면 등록·옮기기 버튼 없음
+    # 空きマスがなければ登録・移動のボタンは出ない
     full = {"cols": 2, "slots": {"1": {"user": "UA", "name": "A"}, "2": {"user": "UB", "name": "B"}}}
     assert ids(build_home(full, [], "UX", now)) == [] and "空いている下駄箱はありません" in text(build_home(full, [], "UX", now))
     assert ids(build_home(full, [], "UB", now)) == ["rename", "release_2"]
 
-    # 칸 고르기 창: 빈 칸만 목록에, 처음 등록이면 이름표 입력칸(Slack 이름을 16글자까지 미리 채움) 포함
+    # マス選択のモーダル: 空きマスだけを一覧に、初めての登録なら名札の入力欄（Slack の名前を 16 文字まで入れておく）付き
     modal = claim_modal(rack, "UX", "Alexander Smith-Johnson")
     opts = modal["blocks"][0]["element"]["options"]
     assert [o["value"] for o in opts] == ["3", "5", "6"] and opts[1]["text"]["text"] == "5番（上から2段目）"
     assert modal["blocks"][1]["element"]["initial_value"] == "Alexander Smith-" and modal["title"]["text"] == "下駄箱の登録"
     assert modal["blocks"][1]["element"]["max_length"] == 16
-    assert "initial_value" not in claim_modal(rack, "UX", "")["blocks"][1]["element"]  # Slack은 빈 initial_value를 거절함
+    assert "initial_value" not in claim_modal(rack, "UX", "")["blocks"][1]["element"]  # Slack は空の initial_value を拒否する
     move = claim_modal(rack, me)
-    assert move["title"]["text"] == "場所の移動" and len(move["blocks"]) == 1  # 옮길 땐 이름표 입력 없음
+    assert move["title"]["text"] == "場所の移動" and len(move["blocks"]) == 1  # 移動のときは名札の入力欄なし
 
-    # 창 제출 처리
+    # モーダル送信の処理
     pick = lambda n, name=None: {"slot": {"value": {"selected_option": {"value": str(n)}}},
                                  **({"name": {"value": {"value": name}}} if name is not None else {})}
-    rack["slots"]["3"]["cell"] = [400, 0, 200, 200]  # calibrate.py가 붙인 값은 그대로 남아야 함
-    assert submit_claim(rack, events, now, "UX", pick(3, " 윤 ")) is None
-    assert rack["slots"]["3"] == {"user": "UX", "name": "윤", "cell": [400, 0, 200, 200]}
-    assert submit_claim(rack, events, now, "UY", pick(3, "누군가")) == ("slot", "すでに他の人が登録しています。別の番号を選んでください。")
+    rack["slots"]["3"]["cell"] = [400, 0, 200, 200]  # calibrate.py が付けた値はそのまま残る必要がある
+    assert submit_claim(rack, events, now, "UX", pick(3, " 山本 ")) is None
+    assert rack["slots"]["3"] == {"user": "UX", "name": "山本", "cell": [400, 0, 200, 200]}
+    assert submit_claim(rack, events, now, "UY", pick(3, "だれか")) == ("slot", "すでに他の人が登録しています。別の番号を選んでください。")
     assert submit_claim(rack, events, now, "UY", pick(5, "")) == ("name", "名前を入力してください。")
-    assert rack["slots"]["5"] == {"user": None}  # 이름이 틀리면 칸도 바뀌지 않음
-    assert rename(rack, me, "유찬") is None
-    assert submit_claim(rack, events, now, me, pick(5)) is None  # 4번 → 5번으로 옮김, 바꾼 이름표 유지
-    assert rack["slots"]["4"] == {"user": None} and rack["slots"]["5"] == {"user": me, "name": "유찬"}
+    assert rack["slots"]["5"] == {"user": None}  # 名前が不正ならマスも変わらない
+    assert rename(rack, me, "翔") is None
+    assert submit_claim(rack, events, now, me, pick(5)) is None  # 4番 → 5番に移動、変更した名札はそのまま
+    assert rack["slots"]["4"] == {"user": None} and rack["slots"]["5"] == {"user": me, "name": "翔"}
     assert submit_claim(rack, events, now, "UA", pick(6)) == ("slot", "靴が入っている間は移動できません。")
 
-    # 해제
+    # 登録解除
     import copy
     r2 = copy.deepcopy(rack)
-    assert change(r2, events, now, "UA", "", "release", 1) is None and r2["slots"]["1"] == {"user": None}  # 신발 있어도 해제
+    assert change(r2, events, now, "UA", "", "release", 1) is None and r2["slots"]["1"] == {"user": None}  # 靴が入っていても解除できる
     assert change(rack, events, now, "UB", "", "release", 1) == "自分の下駄箱のみ解除できます。"
     assert change(rack, events, now, "UB", "", "release", 2) is None and rack["slots"]["2"] == {"user": None}
 
-    # 이름표 바꾸기
+    # 名札の変更
     assert rename(rack, me, "  ") == "名前を入力してください。"
     assert rename(rack, me, "A" * 17) == "名札は16文字までです。"
-    assert rename(rack, me, "山田 太郎") is None and rename(rack, me, "Alexander Smith") is None  # 일본어·영어 이름
-    assert rename(rack, "UZ", "누구") == "先に下駄箱を登録してください。"
-    assert rename(rack, me, " 최 ") is None and rack["slots"]["5"]["name"] == "최"
+    assert rename(rack, me, "山田 太郎") is None and rename(rack, me, "Alexander Smith") is None  # 日本語・英語の名前
+    assert rename(rack, "UZ", "だれ") == "先に下駄箱を登録してください。"
+    assert rename(rack, me, " タナカ ") is None and rack["slots"]["5"]["name"] == "タナカ"
     assert "initial_value" not in rename_modal("")["blocks"][0]["element"]
 
-    # 카메라 출석 이벤트 (rack은 위에서 바뀐 상태: 1번 UA 재실, 3번 UX, 5번 me)
+    # カメラの出席イベント（rack は上で変わった状態: 1番 UA 在室、3番 UX、5番 me）
     t = now.replace(hour=15)
-    assert apply_event(rack, events, 5, "in", t) == (me, None)                 # 주인 있는 칸 → 그 사람 기록
-    assert apply_event(rack, events, 1, "in", t) == (None, "이미 같은 상태라 기록하지 않아요")  # 이미 재실
+    assert apply_event(rack, events, 5, "in", t) == (me, None)                 # 持ち主がいるマス → その人を記録
+    assert apply_event(rack, events, 1, "in", t) == (None, "すでに同じ状態なので記録しません")  # すでに在室
     assert apply_event(rack, events, 1, "out", t) == ("UA", None)
-    assert apply_event(rack, events, 4, "in", t)[0] is None                    # 주인 없는 칸은 무시
+    assert apply_event(rack, events, 4, "in", t)[0] is None                    # 持ち主がいないマスは無視
     assert apply_event(rack, events, 99, "in", t)[0] is None and apply_event(rack, events, 5, "x", t)[0] is None
-    assert slots_summary(rack) == {"cols": 3, "rows": 2, "used": [1, 3, 5]}   # 이름·ID는 안 줌
+    # まとめて送る（POST /events）: 変化したマスだけ記録し、ほかは理由を返す
+    recorded, notes = apply_events(rack, events, {1: "out", 3: "in", 4: "in", 5: "out"}, t)
+    assert recorded == [(1, "UA", "out"), (3, "UX", "in")]
+    assert notes == {4: "4番のマスは持ち主がいないので記録しません", 5: "すでに同じ状態なので記録しません"}
+    assert parse_states({"slots": {"1": "in", "32": "out"}}) == {1: "in", 32: "out"}
+    for bad in [{}, {"slots": {}}, {"slots": [1, 2]}, {"slots": {"x": "in"}}, {"slots": {"1": "in", "2": "maybe"}}]:
+        try:
+            parse_states(bad)
+            assert False, bad
+        except ValueError:
+            pass
+    assert slots_summary(rack) == {"cols": 3, "rows": 2, "used": [1, 3, 5]}   # 名前・ID は返さない
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         p = os.path.join(tmp, "attendance.csv")
@@ -588,9 +660,9 @@ if __name__ == "__main__":
         preview()
     elif cmd == "init":
         if os.path.exists(PATH):
-            sys.exit("slots.json이 이미 있어요. 덮어쓰지 않았어요.")
+            sys.exit("slots.json はすでにあります。上書きしませんでした。")
         n, cols = int(sys.argv[2]), int(sys.argv[3])
         canvas.write_json(PATH, {"cols": cols, "slots": {str(k): {"user": None} for k in range(1, n + 1)}})
-        print(f"빈 신발장을 만들었어요: 칸 {n}개, 가로 {cols}칸 → slots.json")
+        print(f"空の下駄箱を作りました: マス {n} 個、横 {cols} マス → slots.json")
     else:
         run()
