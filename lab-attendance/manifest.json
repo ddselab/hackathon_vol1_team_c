@@ -1,6 +1,6 @@
-{
+﻿{
   "display_information": {
-    "name": "出席"
+    "name": "研究室在籍管理システム"
   },
   "features": {
     "app_home": {
@@ -8,7 +8,7 @@
       "messages_tab_enabled": false
     },
     "bot_user": {
-      "display_name": "getabako",
+      "display_name": "DDSEくん",
       "always_online": false
     }
   },
