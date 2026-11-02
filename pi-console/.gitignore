@@ -1,7 +1,5 @@
 .env
 .DS_Store
 
-# 学習データ用の録画（人が写る）
-recordings/
-*.h264
+# 写真（人が写る）
 *.jpg
