@@ -60,7 +60,7 @@ const STOP_PEACE = `${running(PEACE_PID)} && { kill -- -$(cat ${PEACE_PID})
 for i in $(seq 20); do ${running(PEACE_PID)} || break; sleep 0.5; done
 sudo -n systemctl restart getty@tty1; }; rm -f ${PEACE_PID}`;
 
-// カメラを使わず、画面にドットの目を出してまばたきさせる（pi-zero-playground の raspi/pi_eyes.py）。
+// カメラを使わず、画面にドットの目を出してまばたきさせる（peace-camera/pi_eyes.py）。
 // 見守りと同じ画面に描くので、片方ずつ動かす
 const EYES_PID = "/tmp/pi-panel-eyes.pid";
 const STOP_EYES = `${running(EYES_PID)} && { kill -- -$(cat ${EYES_PID})
@@ -80,7 +80,7 @@ cd ~/hand-landmarker || exit 1
 # "cd && setsid ... &" と書くと、裏で残るサブシェルが SSH の出力を握って返ってこなくなるので分けている
 setsid nohup .venv/bin/python -u pi_peace.py >/tmp/pi-panel-peace.log 2>&1 </dev/null & echo $! > ${PEACE_PID}
 sleep 3; ${running(PEACE_PID)} && echo "started（読み込みに 30 秒ほどかかります）" || { tail -5 /tmp/pi-panel-peace.log >&2; exit 1; }`,
-  // pi-zero-playground の raspi/pi_eyes.py を Pi の ~/hand-landmarker に置いてある前提
+  // peace-camera/pi_eyes.py を Pi の ~/hand-landmarker に置いてある前提
   eyes: `${running(EYES_PID)} && { echo already running; exit 0; }
 ${STOP_PEACE}
 ${CLEAR_CONSOLE}

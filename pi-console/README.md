@@ -24,7 +24,7 @@ Pi のディスプレイに出すものを切り替える。動くのは 1 つ�
 | デフォルト | 全部止めてログイン画面                                                                                                          |
 | 見守り     | 両手ピースを 3 秒で撮影し、出席 Bot（`lab-attendance`）経由で Slack に投稿。靴箱判定も同じ映像で 1 分ごとにする。起動に約 30 秒 |
 
-「目」「見守り」は Pi の `~/hand-landmarker/` にある `pi_eyes.py`・`pi_peace.py` を起動する。
+「目」「見守り」は Pi の `~/hand-landmarker/` にある `pi_eyes.py`・`pi_peace.py`（元はリポジトリの `peace-camera/`）を起動する。
 
 ## 注意
 
