@@ -72,27 +72,27 @@ Pi Lite には画面（GUI）がないので、Pi 側のコマンドは PC か�
 **マスの座標は画素単位なので、必ず Pi のカメラで撮った画像を使ってください。**
 
 以下は PC の PowerShell で打ちます（Windows 11 には `ssh` / `scp` が最初から入っています）。
-`pi@raspberrypi.local` と `~/shoebox` は自分の環境に合わせてください。
+`raspi@ddse.taile6c31a.ts.net` と `~/shoebox` は自分の環境に合わせてください。
 ```
 # 0. コードを Pi に送る（初回とコードを変えたとき）
-ssh pi@raspberrypi.local "mkdir -p ~/shoebox"
-scp main.py shoebox.py shoebox.service pi@raspberrypi.local:shoebox/
+ssh raspi@ddse.taile6c31a.ts.net "mkdir -p ~/shoebox"
+scp main.py shoebox.py shoebox.service raspi@ddse.taile6c31a.ts.net:shoebox/
 
 # 1. 必要なものを入れて、カメラが見えるか確認
-ssh pi@raspberrypi.local "sudo apt install -y --no-install-recommends rpicam-apps python3-opencv python3-numpy"
-ssh pi@raspberrypi.local "rpicam-hello --list-cameras"
+ssh raspi@ddse.taile6c31a.ts.net "sudo apt install -y --no-install-recommends rpicam-apps python3-opencv python3-numpy"
+ssh raspi@ddse.taile6c31a.ts.net "rpicam-hello --list-cameras"
 
 # 2. Pi で撮影 → PC に持ってくる
-ssh pi@raspberrypi.local "cd ~/shoebox && python3 main.py snapshot rack.jpg"
-scp pi@raspberrypi.local:shoebox/rack.jpg .
+ssh raspi@ddse.taile6c31a.ts.net "cd ~/shoebox && python3 main.py snapshot rack.jpg"
+scp raspi@ddse.taile6c31a.ts.net:shoebox/rack.jpg .
 
 # 3. PC でマス設定 → config.json を Pi に送る
 python main.py calibrate --image rack.jpg
-scp config.json pi@raspberrypi.local:shoebox/
+scp config.json raspi@ddse.taile6c31a.ts.net:shoebox/
 
 # 4. 靴箱を空にして、Pi で基準を登録・確認
-ssh pi@raspberrypi.local "cd ~/shoebox && python3 main.py set-empty"
-ssh pi@raspberrypi.local "cd ~/shoebox && python3 main.py status"
+ssh raspi@ddse.taile6c31a.ts.net "cd ~/shoebox && python3 main.py set-empty"
+ssh raspi@ddse.taile6c31a.ts.net "cd ~/shoebox && python3 main.py status"
 ```
 `status` で全マスが「・」（くつなし）になれば準備完了です。
 
@@ -100,7 +100,7 @@ ssh pi@raspberrypi.local "cd ~/shoebox && python3 main.py status"
 - PC にある `empty.png` は Pi に送らないでください（解像度が違うので使えません）。基準画像は 4 で Pi 側に作られます
 - 3 で PC の `config.json` が Pi 用のマス設定に上書きされます。PC 用の設定を残したいときは、先に別名でコピーしておいてください
 - カメラは同時に1つのプログラムしか使えません。`watch` を systemd で動かしている間に `snapshot` や `set-empty` をするときは、
-  先に `ssh pi@raspberrypi.local "systemctl --user stop shoebox"` で止めてください
+  先に `ssh raspi@ddse.taile6c31a.ts.net "systemctl --user stop shoebox"` で止めてください
   （終わったら `systemctl --user start shoebox` で再開）
 
 ### 1分に1回判定する
@@ -154,9 +154,9 @@ sudo loginctl enable-linger "$USER"            # SSH でログインしていな
 動いているプログラムは起動したときのコードのまま動き続けるので、`.py` ファイルを置き換えただけでは反映されません。
 送ったあとに再起動してください（以下は PC で打ちます）。
 ```
-scp main.py shoebox.py pi@raspberrypi.local:shoebox/
-ssh pi@raspberrypi.local "systemctl --user restart shoebox"
-ssh pi@raspberrypi.local "journalctl --user -u shoebox -f"    # エラーが出ていないか確認（Ctrl+C で抜ける）
+scp main.py shoebox.py raspi@ddse.taile6c31a.ts.net:shoebox/
+ssh raspi@ddse.taile6c31a.ts.net "systemctl --user restart shoebox"
+ssh raspi@ddse.taile6c31a.ts.net "journalctl --user -u shoebox -f"    # エラーが出ていないか確認（Ctrl+C で抜ける）
 ```
 コードにエラーがあると、10 秒おきに再起動を繰り返します。ログにエラーが出ていたら直して送り直してください。
 
@@ -169,8 +169,8 @@ ssh pi@raspberrypi.local "journalctl --user -u shoebox -f"    # エラーが出�
 | `shoebox.service` | `~/.config/systemd/user/` にコピーし直してから `systemctl --user daemon-reload` → `systemctl --user restart shoebox`（`~/shoebox/` に送るだけでは反映されない） |
 
 ```
-scp shoebox.service pi@raspberrypi.local:shoebox/
-ssh pi@raspberrypi.local "cp ~/shoebox/shoebox.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user restart shoebox"
+scp shoebox.service raspi@ddse.taile6c31a.ts.net:shoebox/
+ssh raspi@ddse.taile6c31a.ts.net "cp ~/shoebox/shoebox.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user restart shoebox"
 ```
 
 > [!CAUTION]
