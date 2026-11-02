@@ -8,7 +8,7 @@
 環境変数: SLACK_BOT_TOKEN (xoxb-, users:read · canvases:write), SLACK_APP_TOKEN (xapp-, connections:write)
          CANVAS_ID（任意: 設定すると登録が変わったときにキャンバスも更新）, CANVAS_LANG (ja|ko, 既定 ja),
          APP_HOME_URL（任意: キャンバスの下に出す App Home へのリンク。canvas.py 参照）
-         ATTENDANCE_VIEWERS（任意: 出席一覧ボタンを見せる人の Slack ユーザー ID をカンマ区切りで追加。槇原先生は常に見える）
+         ATTENDANCE_VIEWERS（出席一覧ボタンを見せる人の Slack ユーザー ID をカンマ区切りで。未設定なら誰にも出ない）
          PHOTO_CHANNEL（任意: POST /photo で受け取った写真を投稿するチャンネル ID。files:write が必要、Bot をチャンネルに招待しておくこと）
 Slack に表示される文言・コードのコメント・ターミナルのメッセージはすべて日本語。
 slots.json は canvas.py の形式。この Bot はマスの user/name だけを変更する（cell/camera は calibrate.py の担当）。
@@ -32,8 +32,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PATH = os.path.join(HERE, "slots.json")
 LOCK = threading.Lock()  # ボタン処理と出席イベント処理（POST /event, /events）が同時にファイルを触らないように
 DAYS = "月火水木金土日"
-# 出席一覧ボタンが見える人: 槇原先生（Makihara Erina）。試すときは環境変数 ATTENDANCE_VIEWERS=U…,U… で追加できる
-ATTENDANCE_VIEWERS = {"U0ANRV95TS6"} | {u for u in os.environ.get("ATTENDANCE_VIEWERS", "").split(",") if u}
+# 出席一覧ボタンが見える人（槇原先生など）。ID はコードに書かず、環境変数 ATTENDANCE_VIEWERS=U…,U… で渡す
+ATTENDANCE_VIEWERS = {u.strip() for u in os.environ.get("ATTENDANCE_VIEWERS", "").split(",") if u.strip()}
 NAME_MAX = 16  # 名札の文字数。日本語・英語の名前まで余裕をもって（表ではマス内で 2 行に折り返す）
 
 
@@ -561,8 +561,9 @@ def demo():
     later = now.replace(minute=now.minute + 5)
     assert home[1] != build_home(rack, events, "UX", later)[1] and home[2:] == build_home(rack, events, "UX", later)[2:]  # 時刻は blocks[1] にだけ（publish の「変わらなければ送らない」比較がこれを前提にしている）
 
-    # 出席一覧: 槇原先生にだけ表のすぐ下にボタン、モーダルに在室/不在を番号・名札で表示
-    assert build_home(rack, events, "U0ANRV95TS6", now)[3]["elements"][0]["action_id"] == "show_attendance"
+    # 出席一覧: ATTENDANCE_VIEWERS の人にだけ表のすぐ下にボタン、モーダルに在室/不在を番号・名札で表示
+    ATTENDANCE_VIEWERS.add("UT")
+    assert build_home(rack, events, "UT", now)[3]["elements"][0]["action_id"] == "show_attendance"
     for viewer in ("UX", me, "UA"):
         assert "show_attendance" not in all_ids(build_home(rack, events, viewer, now)), viewer
     att = text(attendance_modal(rack, events, now))
