@@ -44,9 +44,12 @@ echo "peace=$([ -f /tmp/pi-panel-peace.pid ] && kill -0 $(cat /tmp/pi-panel-peac
 echo "eyes=$([ -f /tmp/pi-panel-eyes.pid ] && kill -0 $(cat /tmp/pi-panel-eyes.pid) 2>/dev/null && echo 1 || echo 0)"
 `;
 
+// 再起動・シャットダウンは結果が返る前に Pi が SSH を切ることがある。
+// 先に accepted を出しておき、それが届いたあとの切断は成功として扱う
+const POWER_ACCEPTED = "accepted";
 const POWER_COMMANDS = {
-  reboot: "sudo -n systemctl reboot",
-  poweroff: "sudo -n systemctl poweroff",
+  reboot: `echo ${POWER_ACCEPTED}; sudo -n systemctl reboot`,
+  poweroff: `echo ${POWER_ACCEPTED}; sudo -n systemctl poweroff`,
 };
 
 // Pi につないだディスプレイに描くアプリ。止めるときのために PID をファイルに残す
@@ -197,6 +200,13 @@ const server = createServer(async (req, res) => {
 
   const started = Date.now();
   const result = await ssh(command, 30_000);
+  // 255 = SSH の切断、null = タイムアウト。sudo が断ったときは 1 が返るので失敗のまま
+  if (
+    req.url === "/api/power" &&
+    result.stdout.includes(POWER_ACCEPTED) &&
+    (result.code === 255 || result.code === null)
+  )
+    Object.assign(result, { code: 0, stderr: "" });
   sendJson(res, {
     ...result,
     elapsed: Math.round((Date.now() - started) / 10) / 100,
