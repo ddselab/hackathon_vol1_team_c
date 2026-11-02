@@ -160,80 +160,6 @@
       .mode-controls button.no-camera.active {
         border-style: solid;
       }
-      .preview-options {
-        margin-top: 12px;
-        padding-top: 12px;
-        border-top: 1px solid var(--line);
-      }
-      .preview-options summary {
-        cursor: pointer;
-        color: var(--muted);
-        font-size: 13px;
-      }
-      .preview-option-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 10px 16px;
-        margin-top: 12px;
-      }
-      .preview-option {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 4px 8px;
-        align-items: center;
-      }
-      .preview-option label {
-        font-size: 12px;
-        color: var(--muted);
-      }
-      .preview-option output {
-        font:
-          12px ui-monospace,
-          Menlo,
-          monospace;
-      }
-      .preview-option input {
-        grid-column: 1 / -1;
-        width: 100%;
-        accent-color: var(--accent);
-      }
-      .preview-option-actions {
-        grid-column: 1 / -1;
-      }
-      .photo {
-        position: relative;
-        margin-top: 14px;
-        aspect-ratio: 4 / 3;
-        background: var(--code);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        display: grid;
-        place-items: center;
-        overflow: hidden;
-        color: var(--muted);
-      }
-      .photo img {
-        width: 100%;
-        height: 100%;
-        object-fit: contain;
-        display: block;
-      }
-      .photo img[hidden] {
-        display: none;
-      }
-      .photo.loaded button {
-        position: absolute;
-        left: 50%;
-        bottom: 12px;
-        transform: translateX(-50%);
-        background: color-mix(in srgb, var(--card) 88%, transparent);
-        white-space: nowrap;
-      }
-      #photo-state {
-        position: absolute;
-        right: 12px;
-        bottom: 12px;
-      }
     </style>
   </head>
   <body>
@@ -288,7 +214,7 @@
             data-mode="eyes"
             title="カメラは使わず、Pi のディスプレイにドットの目を出してまばたきさせる"
           >
-            待機
+            目
           </button>
           <button
             class="no-camera"
@@ -298,112 +224,12 @@
             デフォルト
           </button>
           <button
-            data-mode="preview"
-            title="Python を使わず、カメラ映像をそのまま Pi のディスプレイに出す"
-          >
-            カメラ
-          </button>
-          <button
             data-mode="peace"
-            title="手を認識して撮影する（raspi/pi_peace.py）。起動に 30 秒ほどかかる"
+            title="両手ピースで撮影し、Slack に投稿する（raspi/pi_peace.py）。起動に 30 秒ほどかかる"
           >
             見守り
           </button>
           <span class="sub" id="mode-state"></span>
-        </div>
-        <details class="preview-options">
-          <summary>カメラの設定</summary>
-          <div class="preview-option-grid">
-            <div class="preview-option">
-              <label for="preview-ev">露出補正</label
-              ><output for="preview-ev">0</output>
-              <input
-                id="preview-ev"
-                data-preview-option="ev"
-                type="range"
-                min="-10"
-                max="10"
-                step="0.5"
-                value="0"
-              />
-            </div>
-            <div class="preview-option">
-              <label for="preview-brightness">明るさ</label
-              ><output for="preview-brightness">0</output>
-              <input
-                id="preview-brightness"
-                data-preview-option="brightness"
-                type="range"
-                min="-1"
-                max="1"
-                step="0.1"
-                value="0"
-              />
-            </div>
-            <div class="preview-option">
-              <label for="preview-contrast">コントラスト</label
-              ><output for="preview-contrast">1</output>
-              <input
-                id="preview-contrast"
-                data-preview-option="contrast"
-                type="range"
-                min="0"
-                max="32"
-                step="0.5"
-                value="1"
-              />
-            </div>
-            <div class="preview-option">
-              <label for="preview-saturation">彩度</label
-              ><output for="preview-saturation">1</output>
-              <input
-                id="preview-saturation"
-                data-preview-option="saturation"
-                type="range"
-                min="0"
-                max="32"
-                step="0.5"
-                value="1"
-              />
-            </div>
-            <div class="preview-option">
-              <label for="preview-sharpness">シャープネス</label
-              ><output for="preview-sharpness">1</output>
-              <input
-                id="preview-sharpness"
-                data-preview-option="sharpness"
-                type="range"
-                min="0"
-                max="16"
-                step="0.5"
-                value="1"
-              />
-            </div>
-            <div class="row preview-option-actions">
-              <button id="apply-preview-options">カメラに適用</button>
-              <button id="reset-preview-options">標準に戻す</button>
-              <span class="sub">適用すると「カメラ」を再起動します</span>
-            </div>
-          </div>
-        </details>
-        <div class="photo" id="photo">
-          <img id="photo-image" alt="Piで撮影した最新の写真" hidden />
-          <button id="latest-photo">最新の写真を取得</button>
-          <span class="sub" id="photo-state"></span>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>学習データ</h2>
-        <div class="row mode-controls">
-          <button
-            data-mode="record"
-            title="見守りと同じ映像を Pi の ~/peace-dataset/recordings/ に保存する。止めるときは「デフォルト」"
-          >
-            録画
-          </button>
-          <button id="pull-recordings">録画を Mac に取り込む</button>
-          <span class="sub" id="recordings-state"></span>
         </div>
       </section>
 
@@ -501,28 +327,12 @@
         $("disk-sub").textContent = "起動から " + uptimeText(s.uptime_s);
         $("disk-bar").style.width = (100 * s.disk_used) / s.disk_total + "%";
 
-        const mode = s.peace
-          ? "peace"
-          : s.preview
-            ? "preview"
-            : s.record
-              ? "record"
-              : s.eyes
-                ? "eyes"
-                : "stop";
+        const mode = s.peace ? "peace" : s.eyes ? "eyes" : "stop";
         document
           .querySelectorAll("[data-mode]")
           .forEach((button) =>
             button.classList.toggle("active", button.dataset.mode === mode),
           );
-        if (!pulling) {
-          const { count, bytes } = s.recordings;
-          $("recordings-state").textContent =
-            `Pi の録画: ${count} 本 / ${(bytes / 1024 ** 2).toFixed(0)} MB` +
-            (s.record ? "（録画中）" : "") +
-            (pullResult ? ` · ${pullResult}` : "");
-        }
-        $("pull-recordings").disabled = s.record || pulling;
       }
 
       async function post(path, body) {
@@ -543,111 +353,17 @@
         }),
       );
 
-      let photoUrl = null;
-
-      async function loadLatestPhoto() {
-        $("latest-photo").disabled = true;
-        $("photo-state").textContent = "取得中…";
-        try {
-          const res = await fetch(`/api/photos/latest?t=${Date.now()}`);
-          if (!res.ok) throw new Error((await res.json()).error);
-          if (photoUrl) URL.revokeObjectURL(photoUrl);
-          photoUrl = URL.createObjectURL(await res.blob());
-          $("photo-image").src = photoUrl;
-          $("photo-image").hidden = false;
-          $("photo").classList.add("loaded");
-          $("photo-state").textContent = "取得済み";
-        } catch (e) {
-          $("photo-state").textContent = "失敗: " + e.message;
-        } finally {
-          $("latest-photo").disabled = false;
-        }
-      }
-
       document.querySelectorAll("[data-mode]").forEach((button) =>
         button.addEventListener("click", async () => {
           const action = button.dataset.mode;
           $("mode-state").textContent =
             action === "stop" ? "停止中…" : "起動中…";
-          const result = await post("/api/mode", {
-            action,
-            ...(action === "preview" ? { options: previewOptions() } : {}),
-          });
+          const result = await post("/api/mode", { action });
           $("mode-state").textContent =
             result.code === 0 ? "" : "失敗: " + (result.stderr || result.error);
           refresh();
         }),
       );
-
-      const previewDefaults = {
-        ev: 0,
-        brightness: 0,
-        contrast: 1,
-        saturation: 1,
-        sharpness: 1,
-      };
-
-      function previewOptions() {
-        return Object.fromEntries(
-          [...document.querySelectorAll("[data-preview-option]")].map(
-            (input) => [input.dataset.previewOption, Number(input.value)],
-          ),
-        );
-      }
-
-      document.querySelectorAll("[data-preview-option]").forEach((input) => {
-        const output = document.querySelector(`output[for="${input.id}"]`);
-        input.addEventListener("input", () => {
-          output.value = input.value;
-        });
-      });
-
-      $("apply-preview-options").addEventListener("click", async () => {
-        $("mode-state").textContent = "設定を適用中…";
-        const result = await post("/api/mode", {
-          action: "preview",
-          options: previewOptions(),
-        });
-        $("mode-state").textContent =
-          result.code === 0 ? "" : "失敗: " + (result.stderr || result.error);
-        refresh();
-      });
-
-      $("reset-preview-options").addEventListener("click", () => {
-        for (const [name, value] of Object.entries(previewDefaults)) {
-          const input = document.querySelector(
-            `[data-preview-option="${name}"]`,
-          );
-          input.value = value;
-          input.dispatchEvent(new Event("input"));
-        }
-      });
-
-      $("latest-photo").addEventListener("click", loadLatestPhoto);
-
-      let pulling = false;
-      let pullResult = ""; // 状態の更新で消えないように、最後の取り込み結果を覚えておく
-
-      $("pull-recordings").addEventListener("click", async () => {
-        pulling = true;
-        $("pull-recordings").disabled = true;
-        $("recordings-state").textContent =
-          "取り込み中…（大きいと数分かかります）";
-        try {
-          const res = await fetch("/api/recordings/pull", { method: "POST" });
-          const result = await res.json();
-          if (!res.ok) throw new Error(result.error);
-          const mbTotal =
-            result.files.reduce((sum, f) => sum + f.bytes, 0) / 1024 ** 2;
-          pullResult = `Mac に ${result.files.length} 本 / ${mbTotal.toFixed(0)} MB（pi-console/recordings/）`;
-        } catch (e) {
-          pullResult = "取り込み失敗: " + e.message;
-        } finally {
-          pulling = false;
-          $("pull-recordings").disabled = false;
-          refresh();
-        }
-      });
 
       refresh();
       setInterval(refresh, 3000);
