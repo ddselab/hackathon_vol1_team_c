@@ -39,6 +39,8 @@
 | `PHOTO_CHANNEL` | | 写真の投稿先チャンネル ID（`C0123ABCD` のような形）。チャンネル名を右クリック → 「チャンネル詳細を表示」の一番下にある |
 | `CANVAS_ID` | | 設定すると、登録が変わったときにキャンバスも更新する |
 | `CANVAS_LANG` | | キャンバスの言語。`ja`（既定）か `ko` |
+| `APP_HOME_URL` | | キャンバスの下に出す「App Home を開く」リンク（例: `slack://app?team=T0ANVH4SRHS&id=<アプリ ID A…>&tab=home`）。省略するとリンクを出さない |
+| `ATTENDANCE_VIEWERS` | | 出席一覧ボタンを見せる人の Slack ユーザー ID をカンマ区切りで追加（例: `U0123ABCD,U0456EFGH`）。槇原先生は設定しなくても常に見える |
 | `EVENT_PORT` | | HTTP サーバーのポート。既定は `8080` |
 
 トークンはコードに書かず、コミットもしないこと。
