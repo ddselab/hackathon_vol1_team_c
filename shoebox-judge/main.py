@@ -28,6 +28,7 @@ from datetime import datetime
 import cv2
 
 from shoebox import (
+    CAMERA_LOCK,
     CELL_NAMES,
     COLS,
     CORNER_LABELS,
@@ -67,6 +68,21 @@ def post_states(url: str, results: dict[str, tuple[bool, float]], when: datetime
     # Bot は Slack の画面を描き直してから応答するので、少し長めに待つ
     with urllib.request.urlopen(req, timeout=30) as res:
         return json.load(res)
+
+
+def peace_camera_running() -> bool:
+    """ピースカメラ (peace-camera/pi_peace.py) が動いているか。
+
+    ピースカメラは動いている間ずっと CAMERA_LOCK を握り、同じカメラ映像で靴箱の判定と送信も自分でする。
+    """
+    import fcntl  # Windows にはないので、Pi で撮るときだけ読み込む
+
+    with open(CAMERA_LOCK, "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+    return False  # ロックはファイルを閉じると外れる
 
 
 def get_source(args) -> str | int:
@@ -253,11 +269,23 @@ def cmd_watch(args):
     if args.post:
         print(f"判定結果を {args.post} に送ります", flush=True)
     prev = None
+    resting = False
     next_at = time.monotonic()
     try:
         while True:
             now = datetime.now()
             stamp = now.strftime("%Y-%m-%d %H:%M:%S")
+            # ピースカメラが動いている間は、向こうが同じカメラ映像で判定して送るので、こちらは撮らずに休む
+            if source == PI_CAMERA and peace_camera_running():
+                if not resting:
+                    print(f"[{stamp}] ピースカメラが判定しているので休みます", flush=True)
+                    resting = True
+                next_at = max(next_at + args.interval, time.monotonic())
+                time.sleep(next_at - time.monotonic())
+                continue
+            if resting:
+                print(f"[{stamp}] ピースカメラが止まったので判定を再開します", flush=True)
+                resting = False
             try:
                 # 毎回読み直すので、動かしたまま「空の状態を登録」やマス設定をし直しても反映される
                 det = ShoeBoxDetector()

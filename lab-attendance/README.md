@@ -363,17 +363,7 @@ def send_photo(path):
 send_photo("photo.jpg")
 ```
 
-[pi-zero-playground](https://github.com/k4nkan/pi-zero-playground) のピースカメラ（`raspi/pi_peace.py`）から送るなら、`Recognition._run` の中の `print(f"saved: {path}", flush=True)` の直後に次を追加する。
-
-```python
-import urllib.request
-try:
-    urllib.request.urlopen(urllib.request.Request(
-        "http://127.0.0.1:8080/photo", data=path.read_bytes(),
-        headers={"Content-Type": "image/jpeg"}), timeout=30)
-except Exception as error:
-    print(f"slack post failed: {error}", file=sys.stderr, flush=True)
-```
+ピースカメラ（`peace-camera/pi_peace.py`）は、両手ピースで撮った写真を保存せず、そのままこの `POST /photo` に送る。
 
 ### 応答コード
 
