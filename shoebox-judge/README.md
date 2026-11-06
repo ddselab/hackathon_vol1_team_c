@@ -92,6 +92,7 @@ scp config.json raspi@ddse.taile6c31a.ts.net:shoebox/
 
 # 4. 靴箱を空にして、Pi で基準を登録・確認
 ssh raspi@ddse.taile6c31a.ts.net "cd ~/shoebox && python3 main.py set-empty"
+ssh raspi@ddse.taile6c31a.ts.net "cd ~/hand-landmarker && .venv/bin/python pi_peace.py --set-shoebox-empty"   # ピースカメラ用（peace-camera/README.md）
 ssh raspi@ddse.taile6c31a.ts.net "cd ~/shoebox && python3 main.py status"
 ```
 `status` で全マスが「・」（くつなし）になれば準備完了です。
@@ -197,7 +198,7 @@ python3 main.py watch --post http://127.0.0.1:9000/events     # 送り先を変�
   ```
 - 送る内容は `{"time": "撮影した時刻", "slots": {"1": "in", "2": "out", …, "32": "out"}}`（くつあり＝`in`、くつなし＝`out`）。
   毎回全マスを送りますが、Bot は前回と変わったマスだけを記録します。Bot が記録したマスがあれば「出席 Bot に記録: 1, 11 番」と表示します
-- 電気が消えているほど暗い（明るさ `dark_empty_brightness` 未満）ときは、全員帰ったとみなして全マス `out` を送ります
+- 電気が消えているほど暗い（画面全体の明るさが `dark_empty_brightness` 未満）ときは、全員帰ったとみなして全マス `out` を送ります
 - それより明るいが判定には暗くて判定できなかった回は送りません（間違った「くつなし」で退室扱いにならないように）
 - Bot が止まっている・つながらないときは「出席 Bot に送れませんでした」と出して、判定はそのまま続けます。
   次の回にまた全マスを送るので、Bot が戻れば状態は追いつきます
@@ -219,7 +220,7 @@ python main.py status --image sample_dark.png     # 薄暗い → 「暗すぎ�
 
 ## 判定の仕組み
 1. 各マスを、指定した四隅で正面向きに補正して切り出します（斜めから撮っていてもOK）
-2. **明るさチェック**：電気が消えているほど暗い（明るさが初期値 12 未満）ときは、全マス「くつなし」とします。
+2. **明るさチェック**：電気が消えているほど暗い（画面全体の明るさが初期値 70 未満）ときは、全マス「くつなし」とします。
    それより明るくても空の状態を登録したときより大幅に暗い（初期値は 30% 未満）、
    または白飛びしているときは、間違った結果を出さないように「判定できません」を返します
 3. **模様の比較**：マスごとに明るさの平均を引いてから、空の状態の画像と模様・形がどれだけ違うかを比べます
@@ -237,7 +238,7 @@ python main.py status --image sample_dark.png     # 薄暗い → 「暗すぎ�
 | `min_ratio` | 0.30 | 空の状態を登録したときと比べ、この割合より暗いと判定しない |
 | `min_brightness` | 15 | 明るさ（0〜255）がこれ未満なら判定しない |
 | `min_contrast` | 1.5 | 画像がほぼ真っ黒（レンズをふさいだ等）なら判定しない |
-| `dark_empty_brightness` | 12 | 明るさ（0〜255）がこれ未満なら電気が消えているとみなし、全マス「くつなし」にする |
+| `dark_empty_brightness` | 70 | 画面全体の明るさ（0〜255）がこれ未満なら電気が消えているとみなし、全マス「くつなし」にする |
 
 ## ファイル
 - `shoebox.py` … 判定処理の本体

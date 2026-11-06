@@ -95,7 +95,7 @@ def is_peace(hand):
 class Camera:
     """rpicam-vid でプレビューを出しつつ、YUV420 の stdout を別スレッドで読み続けて最新の1枚だけ持つ。"""
 
-    def __init__(self):
+    def __init__(self, preview=True):
         self.lock = open(CAMERA_LOCK, "a")
         fcntl.flock(self.lock, fcntl.LOCK_EX)  # shoebox-judge の watch が撮影中なら、終わるまで待つ
         self.latest = None
@@ -104,7 +104,8 @@ class Camera:
              "--framerate", str(FRAMERATE), "--codec", "yuv420",
              "--mode", SENSOR_MODE, "--roi", f"0,{CROP_Y:.6f},1,{CROP_H:.6f}",
              "--hflip",  # 鏡のように左右反転
-             "-p", f"{PREVIEW_X},{PREVIEW_Y},{PREVIEW_W},{PREVIEW_H}", "-o", "-"],
+             *(["-p", f"{PREVIEW_X},{PREVIEW_Y},{PREVIEW_W},{PREVIEW_H}"] if preview else ["-n"]),
+             "-o", "-"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
         threading.Thread(target=self._read, daemon=True).start()
@@ -248,7 +249,11 @@ class Recognition:
 
 def fit_to_frame(detector):
     """マス設定と基準画像は shoebox-judge が rpicam-still（4:3 全体、1296×972）で作っているので、
-    映像と同じように上を切り取って縮める。ファイルは書き換えない。"""
+    映像と同じように上を切り取って縮める。ファイルは書き換えない。
+
+    映像は静止画と写り方（明るさの階調）が違い、静止画の基準と比べると空でもスコアが高く出てしまう。
+    そのため、映像で撮った空の基準画像（SHOEBOX_EMPTY_VIDEO、--set-shoebox-empty で作る）があれば、そちらと比べる。
+    """
     if detector.empty is None:
         return
     height, width = detector.empty.shape[:2]
@@ -259,7 +264,47 @@ def fit_to_frame(detector):
     detector.config["cells"] = {
         name: [[x * sx, (y - top) * sy] for x, y in quad] for name, quad in detector.cells.items()
     }
-    detector.empty = cv2.resize(detector.empty[round(top):], (CAPTURE_W, CAPTURE_H), interpolation=cv2.INTER_AREA)
+    still = cv2.resize(detector.empty[round(top):], (CAPTURE_W, CAPTURE_H), interpolation=cv2.INTER_AREA)
+    detector.empty = still
+    video = load_empty_video()
+    if video is None:
+        return
+    # 映像は静止画より暗く写る（靴箱の中が静止画 31・映像 10 程度）ので、
+    # 「これより暗いと判定しない」明るさも、同じ割合で下げる
+    ratio = detector.lighting(video)[0] / max(detector.lighting(still)[0], 1.0)
+    detector.config["min_brightness"] = float(detector.config["min_brightness"]) * ratio
+    detector.empty = video
+
+
+def load_empty_video():
+    """映像で撮った空の基準画像。ないとき・静止画の基準（empty.png）より古いときは None。"""
+    path, still = SHOEBOX_DIR / "empty_video.png", SHOEBOX_DIR / "empty.png"
+    if not path.exists():
+        return None
+    if still.exists() and path.stat().st_mtime < still.stat().st_mtime:
+        # 静止画の基準を登録し直した（カメラを動かした等）のに映像の基準が古いままだと、ずれた画像と比べてしまう
+        print("shoebox: empty_video.png が empty.png より古いので使いません。"
+              "pi_peace.py --set-shoebox-empty で撮り直してください", flush=True)
+        return None
+    image = cv2.imread(str(path))
+    if image is None or image.shape[:2] != (CAPTURE_H, CAPTURE_W):
+        return None
+    return image
+
+
+def set_shoebox_empty():
+    """靴箱が空の状態を、映像で撮って SHOEBOX_DIR/empty_video.png に保存する（ピースカメラの判定の基準）。"""
+    camera = Camera(preview=False)
+    try:
+        time.sleep(4)  # 自動露出が落ち着くのを待つ
+        data = camera.snapshot()
+        if data is None:
+            sys.exit("映像を取れませんでした")
+        path = SHOEBOX_DIR / "empty_video.png"
+        cv2.imwrite(str(path), Camera.to_bgr(data))
+        print(f"空の状態を {path} に保存しました")
+    finally:
+        camera.stop()
 
 
 class Shoebox:
@@ -393,4 +438,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] == ["--set-shoebox-empty"]:
+        set_shoebox_empty()
+    else:
+        main()
