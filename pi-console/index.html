@@ -225,7 +225,7 @@
           </button>
           <button
             data-mode="peace"
-            title="両手ピースで撮影し、Slack に投稿する（raspi/pi_peace.py）。起動に 30 秒ほどかかる"
+            title="両手ピースで撮影し、Slack に投稿する（peace-camera/pi_peace.py）。起動に 30 秒ほどかかる"
           >
             見守り
           </button>
@@ -348,8 +348,10 @@
         b.addEventListener("click", async () => {
           if (!confirm(`本当に${b.textContent}しますか？`)) return;
           const r = await post("/api/power", { action: b.dataset.power });
-          if (r.code !== 0)
-            $("power-state").textContent = "失敗: " + (r.stderr || r.error);
+          $("power-state").textContent =
+            r.code === 0
+              ? `${b.textContent}しています…`
+              : "失敗: " + (r.stderr || r.error);
         }),
       );
 

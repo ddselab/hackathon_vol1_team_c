@@ -79,11 +79,10 @@ PI_CAMERA = "pi"
 PI_CAMERA_SIZE = (1296, 972)
 # 撮影前に自動露出・ホワイトバランスが落ち着くのを待つ時間 (ミリ秒)
 PI_CAMERA_WAIT_MS = 2000
-# ピースカメラ (pi_peace.py) とカメラを譲り合うためのファイル。同じ Pi・同じユーザーで動かす前提。
-# カメラを使う間は CAMERA_LOCK を flock で握る。CAMERA_REQUEST を置くと pi_peace.py が映像を止めて譲る
+# カメラを2つのプログラムで同時に開かないためのロック。同じ Pi・同じユーザーで動かす前提。
+# 撮る間は flock で握る。ピースカメラ (peace-camera/pi_peace.py) は動いている間ずっと握り、靴箱判定も自分でする
 CAMERA_LOCK = "/tmp/pi-camera.lock"
-CAMERA_REQUEST = "/tmp/pi-camera.request"
-# ピースのカウントダウン・撮影中は譲ってもらえないので、それが終わるのを待てる長さにする (秒)
+# ほかの撮影 (watch と snapshot など) と重なったときに、終わるのを待つ長さ (秒)
 CAMERA_LOCK_TIMEOUT = 15
 
 DEFAULT_CONFIG = {
@@ -127,27 +126,22 @@ def default_source() -> str | int:
 
 @contextlib.contextmanager
 def camera_lock():
-    """ピースカメラにカメラを譲ってもらい、使い終わるまで握っておく。"""
+    """カメラのロックが空くのを待って握り、使い終わるまで握っておく。"""
     import fcntl  # Windows にはないので、Pi で撮るときだけ読み込む
 
     with open(CAMERA_LOCK, "a") as lock:
-        open(CAMERA_REQUEST, "a").close()
-        try:
-            deadline = time.monotonic() + CAMERA_LOCK_TIMEOUT
-            while True:
-                try:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        raise RuntimeError(
-                            "ほかのプログラムがカメラを使っていて、譲ってもらえませんでした"
-                        ) from None
-                    time.sleep(0.2)
-        finally:
-            # 握れたら依頼は取り下げる。ピースカメラはロックが空くのを待って映像を再開する
-            with contextlib.suppress(FileNotFoundError):
-                os.remove(CAMERA_REQUEST)
+        deadline = time.monotonic() + CAMERA_LOCK_TIMEOUT
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        "ほかのプログラムがカメラを使っています"
+                        " (ピースカメラが動いていたら、pi-console で「デフォルト」にしてください)"
+                    ) from None
+                time.sleep(0.2)
         yield  # ロックはファイルを閉じると外れる
 
 

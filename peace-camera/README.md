@@ -3,6 +3,9 @@
 Raspberry Pi につないだディスプレイにカメラ映像を映し、両手ピースを 3 秒続けると撮影して Slack に投稿する。
 同じ映像で、靴箱判定（`shoebox-judge`）も 1 分ごとに行う。pi-console の「見守り」で起動する。
 
+同じフォルダの `pi_eyes.py` は、カメラを使わずにディスプレイにドットの目を出してまばたきさせる（pi-console の「目」）。
+目の開き具合ごとの画面を起動時に作っておき、まばたきの瞬間だけ書き込むので、CPU もメモリもほとんど使わない。
+
 ```
 rpicam-vid（1280×748、15fps、開きっぱなし）
   ├─ プレビュー … GPU が画面の真ん中に映す（855×500、見た目は 16:9）
@@ -21,6 +24,7 @@ rpicam-vid（1280×748、15fps、開きっぱなし）
 | Pi のパス | 中身 |
 | --- | --- |
 | `~/hand-landmarker/pi_peace.py` | このフォルダの `pi_peace.py` |
+| `~/hand-landmarker/pi_eyes.py` | このフォルダの `pi_eyes.py` |
 | `~/hand-landmarker/models/hand_landmarker.task` | MediaPipe のモデル（リポジトリには入れていない） |
 | `~/hand-landmarker/.venv/` | Python 3.12 + mediapipe 0.10.18 + opencv-contrib-python + Pillow |
 | `~/shoebox/` | `shoebox-judge`（`main.py`・`shoebox.py`・`config.json`・`empty.png`）。靴箱判定に使う |
@@ -40,6 +44,7 @@ scp peace-camera/pi_peace.py raspi@ddse:hand-landmarker/
 `pi_peace.py` と `main.py` はカメラの使い方をそろえているので、片方だけ古いままにしない。
 
 送ったあとは pi-console で「デフォルト」→「見守り」と押して起動し直す（動いているプログラムは古いコードのまま）。
+`pi_eyes.py` も同じように `.bak-` を残して送り、「デフォルト」→「目」で起動し直す。
 
 ## バックアップに戻す
 
