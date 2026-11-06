@@ -92,6 +92,7 @@ scp config.json raspi@ddse.taile6c31a.ts.net:shoebox/
 
 # 4. 靴箱を空にして、Pi で基準を登録・確認
 ssh raspi@ddse.taile6c31a.ts.net "cd ~/shoebox && python3 main.py set-empty"
+ssh raspi@ddse.taile6c31a.ts.net "cd ~/hand-landmarker && .venv/bin/python pi_peace.py --set-shoebox-empty"   # ピースカメラ用（peace-camera/README.md）
 ssh raspi@ddse.taile6c31a.ts.net "cd ~/shoebox && python3 main.py status"
 ```
 `status` で全マスが「・」（くつなし）になれば準備完了です。

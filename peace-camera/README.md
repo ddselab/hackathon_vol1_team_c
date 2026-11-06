@@ -24,8 +24,26 @@ rpicam-vid（1280×748、15fps、開きっぱなし）
 | `~/hand-landmarker/models/hand_landmarker.task` | MediaPipe のモデル（リポジトリには入れていない） |
 | `~/hand-landmarker/.venv/` | Python 3.12 + mediapipe 0.10.18 + opencv-contrib-python + Pillow |
 | `~/shoebox/` | `shoebox-judge`（`main.py`・`shoebox.py`・`config.json`・`empty.png`）。靴箱判定に使う |
+| `~/shoebox/empty_video.png` | 靴箱が空の状態を映像で撮った基準画像（下の「靴箱判定の基準画像」） |
 
 ログは `/tmp/pi-panel-peace.log`（`shoebox:` で始まる行が靴箱判定）。
+
+## 靴箱判定の基準画像
+
+映像は静止画（`shoebox-judge` の `rpicam-still`）と写り方が違い、靴箱の中が 3 分の 1 くらいの明るさで写る。
+静止画の `empty.png` と比べると、空でもスコアが高く出て誤判定するので、映像で撮った空の基準画像 `empty_video.png` と比べる。
+
+`shoebox-judge` で「空の状態を登録」（`set-empty`）をし直したら、靴箱を空にしたまま、続けてこれも撮り直す。
+pi-console で「デフォルト」にしてから（カメラを使うので）、PC で打つ。
+
+```sh
+ssh raspi@ddse 'cd ~/hand-landmarker && .venv/bin/python pi_peace.py --set-shoebox-empty'
+```
+
+- `empty_video.png` がない、または `empty.png` より古いときは、今までどおり `empty.png` を切り取って比べる
+  （古いときはログに「empty_video.png が empty.png より古いので使いません」と出る）。この場合、点灯していても
+  「判定できません」や誤判定になりやすい
+- 「これより暗いと判定しない」明るさ（`min_brightness`）は、映像と静止画の基準画像の明るさの比に合わせて自動で下げる
 
 ## 更新するとき
 
