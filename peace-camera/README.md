@@ -1,17 +1,20 @@
 # peace-camera（ピースカメラ）
 
-Raspberry Pi につないだディスプレイにカメラ映像を映し、両手ピースを 3 秒続けると撮影して Slack に投稿する。
+Raspberry Pi につないだディスプレイに、ふだんはまばたきする目（`pi_eyes.py` と同じ）を出す。
+ピースが写るとカメラ映像に切り替わり、ピースを 2 秒続けると撮影して Slack に投稿する。
 同じ映像で、靴箱判定（`shoebox-judge`）も 1 分ごとに行う。pi-console の「見守り」で起動する。
 
 ```
-rpicam-vid（1280×748、15fps、開きっぱなし）
-  ├─ プレビュー … GPU が画面の真ん中に映す（855×500、見た目は 16:9）
+rpicam-vid（1280×748、15fps、開きっぱなし、プレビューなし）
   └─ stdout の最新の1枚（メモリ）
+       ├─ 画面 … ピースが写っている間だけ、Python が縮めて /dev/fb0 の真ん中に描く（854×500）。それ以外は目
        ├─ ピース認識（MediaPipe）→ 撮影 → POST /photo（lab-attendance）→ Slack
        └─ 靴箱判定（1分ごと、手が写っていないとき）→ POST /events（lab-attendance）
 ```
 
 - カメラを開き直さないので、撮影中も靴箱判定中も映像は止まらない。写真は保存しない
+- 映像に切り替わるのは、ピースが写っている間と、撮影して `POSTED` / `ERROR` を出し終えるまで。ピースが写らなくなって 2 秒で目に戻る
+- rpicam-vid の GPU プレビューは画面のいちばん上に重なって目を隠すので使わない（映像の描画は 1 枚 40ms ほど）
 - 映像は靴箱判定と同じ 4:3 全体のモード（1296×972）から、上（天井側）を切り取って横長にしている
 - 画面の余白には、上に状態（`HANDS n` / `SENDING` / `POSTED` / `ERROR`）、下に日時、左にカウントダウンを描く
 - 動いている間は `/tmp/pi-camera.lock` を握るので、`shoebox-judge` の `watch`（`shoebox.service`）は撮影を休む
@@ -21,6 +24,7 @@ rpicam-vid（1280×748、15fps、開きっぱなし）
 | Pi のパス | 中身 |
 | --- | --- |
 | `~/hand-landmarker/pi_peace.py` | このフォルダの `pi_peace.py` |
+| `~/hand-landmarker/pi_eyes.py` | このフォルダの `pi_eyes.py`（pi-console の「目」。`pi_peace.py` も目の絵に使う） |
 | `~/hand-landmarker/models/hand_landmarker.task` | MediaPipe のモデル（リポジトリには入れていない） |
 | `~/hand-landmarker/.venv/` | Python 3.12 + mediapipe 0.10.18 + opencv-contrib-python + Pillow |
 | `~/shoebox/` | `shoebox-judge`（`main.py`・`shoebox.py`・`config.json`・`empty.png`）。靴箱判定に使う |
@@ -33,7 +37,7 @@ rpicam-vid（1280×748、15fps、開きっぱなし）
 
 ```sh
 ssh raspi@ddse 'cp ~/hand-landmarker/pi_peace.py ~/hand-landmarker/pi_peace.py.bak-$(date +%Y%m%d)'
-scp peace-camera/pi_peace.py raspi@ddse:hand-landmarker/
+scp peace-camera/pi_peace.py peace-camera/pi_eyes.py raspi@ddse:hand-landmarker/
 ```
 
 `shoebox-judge/main.py` を変えたときは `~/shoebox/` にも送り、`systemctl --user restart shoebox` する。

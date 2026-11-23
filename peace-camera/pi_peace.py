@@ -2,14 +2,16 @@
 
 カメラは rpicam-vid を 1 本だけ開きっぱなしにして、ピースの認識・撮影・靴箱判定のすべてに同じ映像を使う。
 カメラを開き直さないので、撮影中も靴箱判定中も映像は止まらない。
-映像の表示は rpicam-vid の DRM プレビュー（GPU）に任せ、Python は映像のまわりの余白に
-状態（上）・日時（下）・カウントダウン（左）を描くだけ。
+ふだんの画面は pi_eyes.py と同じまばたきする目で、ピースが写っている間だけカメラ映像に切り替える。
+映像のまわりの余白には、状態（上）・日時（下）・カウントダウン（左）を描く。
+rpicam-vid の DRM プレビューは画面のいちばん上に重なって目を隠してしまうので使わず、Python が /dev/fb0 に描く。
 MediaPipe 1.x は Pi Zero 2 W の CPU（AES 命令なし）で落ちるので、Python 3.12 + mediapipe 0.10.18 で動かす。
 """
 
 import fcntl
 import functools
 import os
+import random
 import signal
 import subprocess
 import sys
@@ -25,7 +27,9 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-# 撮影・靴箱判定・プレビュー・認識のすべてに使う映像。
+import pi_eyes  # 同じフォルダの pi_eyes.py（目の絵とまばたきの間隔）
+
+# 撮影・靴箱判定・表示・認識のすべてに使う映像。
 # ディスプレイ（1024×600）は画素が少し横長なので、1280×748 で見た目がちょうど 16:9 になる。
 # rpicam-vid は幅が 64 の倍数でないと 1 行ごとに詰め物を入れて出力するので、幅は 1280 にする
 CAPTURE_W, CAPTURE_H = 1280, 748
@@ -37,7 +41,8 @@ CROP_H = CAPTURE_H * SENSOR_W / (CAPTURE_W * SENSOR_H)  # 4:3 全体のうち使
 CROP_Y = 1 - CROP_H
 WIDTH, HEIGHT = 320, 188  # 認識に使う解像度。小さいほど速い（YUV420 なので偶数）
 IDLE_INTERVAL = 1.0  # 手が写っていないときの推論間隔（秒）
-COUNTDOWN_SECONDS = 3
+COUNTDOWN_SECONDS = 2
+CAMERA_LINGER = 2  # ピースが写らなくなってから目に戻すまで（秒）。認識が一瞬途切れても映像がちらつかないように
 MODEL = Path(__file__).parent / "models" / "hand_landmarker.task"
 # 撮った写真は保存せず、出席 Bot（lab-attendance/bot.py）の POST /photo に送って Slack に投稿してもらう
 PHOTO_URL = os.environ.get("PHOTO_URL", "http://127.0.0.1:8080/photo")
@@ -52,9 +57,9 @@ SHOEBOX_WAIT = 30  # 手が写っている（人が前にいる）間は判定�
 CAMERA_LOCK = "/tmp/pi-camera.lock"
 
 SCREEN_W, SCREEN_H = (int(v) for v in Path("/sys/class/graphics/fb0/virtual_size").read_text().split(","))
-# 映像は真ん中に置き、上下左右の余白に文字を描く
-PREVIEW_H = SCREEN_H * 5 // 6
-PREVIEW_W = PREVIEW_H * CAPTURE_W // CAPTURE_H
+# 映像は真ん中に置き、上下左右の余白に文字を描く（YUV420 のまま縮めるので幅も高さも偶数）
+PREVIEW_H = SCREEN_H * 5 // 6 // 2 * 2
+PREVIEW_W = PREVIEW_H * CAPTURE_W // CAPTURE_H // 2 * 2
 PREVIEW_X, PREVIEW_Y = (SCREEN_W - PREVIEW_W) // 2, (SCREEN_H - PREVIEW_H) // 2
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 ACCENT = (255, 0, 81)  # #ff0051（RGB）
@@ -93,7 +98,7 @@ def is_peace(hand):
 
 
 class Camera:
-    """rpicam-vid でプレビューを出しつつ、YUV420 の stdout を別スレッドで読み続けて最新の1枚だけ持つ。"""
+    """rpicam-vid の YUV420 の stdout を別スレッドで読み続けて最新の1枚だけ持つ。"""
 
     def __init__(self):
         self.lock = open(CAMERA_LOCK, "a")
@@ -104,7 +109,7 @@ class Camera:
              "--framerate", str(FRAMERATE), "--codec", "yuv420",
              "--mode", SENSOR_MODE, "--roi", f"0,{CROP_Y:.6f},1,{CROP_H:.6f}",
              "--hflip",  # 鏡のように左右反転
-             "-p", f"{PREVIEW_X},{PREVIEW_Y},{PREVIEW_W},{PREVIEW_H}", "-o", "-"],
+             "-n", "-o", "-"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
         threading.Thread(target=self._read, daemon=True).start()
@@ -120,25 +125,30 @@ class Camera:
         return self.latest
 
     def read(self):
-        """認識用に縮小した RGB を返す（プレビューと同じく左右反転したまま）。"""
+        """認識用に縮小した RGB を返す（画面と同じく左右反転したまま）。"""
         data = self.latest
         if data is None:
             return None
+        return self.shrink(data, WIDTH, HEIGHT)
+
+    @staticmethod
+    def shrink(data, width, height):
+        """snapshot の1枚を width×height の RGB に縮める（width・height は偶数）。"""
         # 全体を RGB にしてから縮めると重いので、Y・U・V の面ごとに縮めてから変換する
         yuv = np.frombuffer(data, np.uint8)
         y_size, uv_size = CAPTURE_W * CAPTURE_H, CAPTURE_W * CAPTURE_H // 4
         planes = (
-            (yuv[:y_size].reshape(CAPTURE_H, CAPTURE_W), (WIDTH, HEIGHT)),
-            (yuv[y_size:y_size + uv_size].reshape(CAPTURE_H // 2, CAPTURE_W // 2), (WIDTH // 2, HEIGHT // 2)),
-            (yuv[y_size + uv_size:].reshape(CAPTURE_H // 2, CAPTURE_W // 2), (WIDTH // 2, HEIGHT // 2)),
+            (yuv[:y_size].reshape(CAPTURE_H, CAPTURE_W), (width, height)),
+            (yuv[y_size:y_size + uv_size].reshape(CAPTURE_H // 2, CAPTURE_W // 2), (width // 2, height // 2)),
+            (yuv[y_size + uv_size:].reshape(CAPTURE_H // 2, CAPTURE_W // 2), (width // 2, height // 2)),
         )
         small = np.concatenate([cv2.resize(plane, size, interpolation=cv2.INTER_AREA).ravel()
                                 for plane, size in planes])
-        return cv2.cvtColor(small.reshape(HEIGHT * 3 // 2, WIDTH), cv2.COLOR_YUV2RGB_I420)
+        return cv2.cvtColor(small.reshape(height * 3 // 2, width), cv2.COLOR_YUV2RGB_I420)
 
     @staticmethod
     def to_bgr(data):
-        """snapshot の1枚を、撮影サイズの BGR にする。プレビュー用の左右反転は戻す。"""
+        """snapshot の1枚を、撮影サイズの BGR にする。画面用の左右反転は戻す。"""
         yuv = np.frombuffer(data, np.uint8).reshape(CAPTURE_H * 3 // 2, CAPTURE_W)
         return cv2.flip(cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420), 1)
 
@@ -166,6 +176,7 @@ class Recognition:
         self.landmarker = landmarker
         self.mp = mp
         self.hand_count = 0
+        self.peace_at = float("-inf")  # 最後にピースが写った時刻
         self.countdown_started = None
         self.armed = True
         self.notice = None
@@ -194,7 +205,8 @@ class Recognition:
                 print(f"recognition: {runs / 10:.1f}/s, {1000 * busy / max(runs, 1):.0f}ms each", flush=True)
                 runs, busy, report_at = 0, 0.0, now + 10
 
-            if peace_count >= 2:
+            if peace_count:
+                self.peace_at = now
                 if not self.armed:
                     continue
                 if self.countdown_started is None:
@@ -245,10 +257,19 @@ class Recognition:
             return None, max(1, COUNTDOWN_SECONDS - int(elapsed))
         return None, None
 
+    def show_camera(self):
+        """画面をカメラ映像にするか。ピースが写っている間と、撮影して結果を出し終えるまで。"""
+        notice, countdown = self.status()
+        return bool(notice) or countdown is not None or time.monotonic() - self.peace_at < CAMERA_LINGER
+
 
 def fit_to_frame(detector):
     """マス設定と基準画像は shoebox-judge が rpicam-still（4:3 全体、1296×972）で作っているので、
-    映像と同じように上を切り取って縮める。ファイルは書き換えない。"""
+    映像と同じように上を切り取って縮める。ファイルは書き換えない。
+
+    映像は静止画と写り方（明るさの階調）が違い、静止画の基準と比べると空でもスコアが高く出てしまう。
+    そのため、映像で撮った空の基準画像（SHOEBOX_EMPTY_VIDEO、--set-shoebox-empty で作る）があれば、そちらと比べる。
+    """
     if detector.empty is None:
         return
     height, width = detector.empty.shape[:2]
@@ -259,7 +280,47 @@ def fit_to_frame(detector):
     detector.config["cells"] = {
         name: [[x * sx, (y - top) * sy] for x, y in quad] for name, quad in detector.cells.items()
     }
-    detector.empty = cv2.resize(detector.empty[round(top):], (CAPTURE_W, CAPTURE_H), interpolation=cv2.INTER_AREA)
+    still = cv2.resize(detector.empty[round(top):], (CAPTURE_W, CAPTURE_H), interpolation=cv2.INTER_AREA)
+    detector.empty = still
+    video = load_empty_video()
+    if video is None:
+        return
+    # 映像は静止画より暗く写る（靴箱の中が静止画 31・映像 10 程度）ので、
+    # 「これより暗いと判定しない」明るさも、同じ割合で下げる
+    ratio = detector.lighting(video)[0] / max(detector.lighting(still)[0], 1.0)
+    detector.config["min_brightness"] = float(detector.config["min_brightness"]) * ratio
+    detector.empty = video
+
+
+def load_empty_video():
+    """映像で撮った空の基準画像。ないとき・静止画の基準（empty.png）より古いときは None。"""
+    path, still = SHOEBOX_DIR / "empty_video.png", SHOEBOX_DIR / "empty.png"
+    if not path.exists():
+        return None
+    if still.exists() and path.stat().st_mtime < still.stat().st_mtime:
+        # 静止画の基準を登録し直した（カメラを動かした等）のに映像の基準が古いままだと、ずれた画像と比べてしまう
+        print("shoebox: empty_video.png が empty.png より古いので使いません。"
+              "pi_peace.py --set-shoebox-empty で撮り直してください", flush=True)
+        return None
+    image = cv2.imread(str(path))
+    if image is None or image.shape[:2] != (CAPTURE_H, CAPTURE_W):
+        return None
+    return image
+
+
+def set_shoebox_empty():
+    """靴箱が空の状態を、映像で撮って SHOEBOX_DIR/empty_video.png に保存する（ピースカメラの判定の基準）。"""
+    camera = Camera()
+    try:
+        time.sleep(4)  # 自動露出が落ち着くのを待つ
+        data = camera.snapshot()
+        if data is None:
+            sys.exit("映像を取れませんでした")
+        path = SHOEBOX_DIR / "empty_video.png"
+        cv2.imwrite(str(path), Camera.to_bgr(data))
+        print(f"空の状態を {path} に保存しました")
+    finally:
+        camera.stop()
 
 
 class Shoebox:
@@ -329,13 +390,40 @@ class Shoebox:
             self.thread.join(timeout=20)
 
 
-def write(fb, image):
+def to_rgb565(image):
+    return cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR565)  # fb0 は 16bit（RGB565）
+
+
+def write(fb, data):
     fb.seek(0)
-    fb.write(cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR565).tobytes())  # fb0 は 16bit（RGB565）
+    fb.write(data)
+    fb.flush()
+
+
+class Face:
+    """pi_eyes.py と同じ目を、同じ間隔でまばたきさせる。"""
+
+    def __init__(self):
+        frames = [pi_eyes.render(openness) for openness in pi_eyes.OPENNESS]
+        self.open = frames[0]
+        self.blink = frames[1:] + frames[-2::-1]  # 閉じて、また開く
+        self.sequence, self.started = [], 0.0
+        self.blink_at = time.monotonic() + random.uniform(*pi_eyes.BLINK_INTERVAL)
+
+    def frame(self, now):
+        """今出す画面（RGB565 のバイト列）。"""
+        if now >= self.blink_at:
+            self.sequence, self.started = list(self.blink), now
+            if random.random() < pi_eyes.DOUBLE_BLINK:  # 少し開いてから、もう一度パチパチする
+                self.sequence += [self.open] * round(0.15 / pi_eyes.FRAME_SECONDS) + self.blink
+            self.blink_at = now + len(self.sequence) * pi_eyes.FRAME_SECONDS \
+                + random.uniform(*pi_eyes.BLINK_INTERVAL)
+        index = int((now - self.started) / pi_eyes.FRAME_SECONDS)
+        return self.sequence[index] if index < len(self.sequence) else self.open
 
 
 def draw_screen(notice, countdown, hand_count, clock):
-    """映像のまわりの余白に描く（映像の下になる部分は GPU の映像で隠れる）。"""
+    """映像のまわりの余白に描く（真ん中はあとから映像で上書きする）。"""
     image = Image.new("RGB", (SCREEN_W, SCREEN_H))
     draw = ImageDraw.Draw(image)
     top, bottom = (SCREEN_W // 2, PREVIEW_Y // 2), (SCREEN_W // 2, SCREEN_H - PREVIEW_Y // 2)  # 上下の余白の真ん中
@@ -358,7 +446,7 @@ def main():
     loading = Image.new("RGB", (SCREEN_W, SCREEN_H))
     ImageDraw.Draw(loading).text((SCREEN_W // 2, SCREEN_H // 2), "LOADING...", font=font(SCREEN_H // 10),
                                  fill=WHITE, anchor="mm")
-    write(fb, loading)
+    write(fb, to_rgb565(loading).tobytes())
 
     # mediapipe の読み込みに 30 秒近くかかるので、先に LOADING を出してから読む
     import mediapipe as mp
@@ -375,15 +463,30 @@ def main():
     camera = Camera()
     recognition = Recognition(camera, landmarker, mp)
     shoebox = Shoebox(camera, recognition)
-    shown = None
+    face = Face()
+    shown, margin_state, screen = None, None, None
     try:
         while True:
-            # 映像は GPU が描くので、ここは余白の表示が変わったとき（少なくとも毎秒、時計）だけ書き直す
-            state = (*recognition.status(), recognition.hand_count, time.strftime("%Y/%m/%d %H:%M:%S"))
-            if state != shown:
-                write(fb, draw_screen(*state))
-                shown = state
-            time.sleep(0.1)
+            # 画面は、出すもの（目のコマ、カメラの新しい1枚、余白の文字）が変わったときだけ書き直す
+            if recognition.show_camera():
+                state = (*recognition.status(), recognition.hand_count, time.strftime("%Y/%m/%d %H:%M:%S"))
+                if state != margin_state:
+                    screen = to_rgb565(draw_screen(*state))
+                    margin_state = state
+                data = camera.snapshot()
+                current = ("camera", state, id(data))
+                if current != shown:
+                    if data is not None:
+                        video = Camera.shrink(data, PREVIEW_W, PREVIEW_H)
+                        screen[PREVIEW_Y:PREVIEW_Y + PREVIEW_H, PREVIEW_X:PREVIEW_X + PREVIEW_W] = to_rgb565(video)
+                    write(fb, screen.tobytes())
+                    shown = current
+            else:
+                frame = face.frame(time.monotonic())
+                if ("face", id(frame)) != shown:
+                    write(fb, frame)
+                    shown = ("face", id(frame))
+            time.sleep(0.02)
     finally:
         shoebox.stop()
         recognition.stop()
@@ -393,4 +496,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] == ["--set-shoebox-empty"]:
+        set_shoebox_empty()
+    else:
+        main()
