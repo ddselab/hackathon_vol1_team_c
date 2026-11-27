@@ -8,6 +8,7 @@ rpicam-vid の DRM プレビューは画面のいちばん上に重なって目�
 MediaPipe 1.x は Pi Zero 2 W の CPU（AES 命令なし）で落ちるので、Python 3.12 + mediapipe 0.10.18 で動かす。
 """
 
+import contextlib
 import fcntl
 import functools
 import os
@@ -49,12 +50,15 @@ PHOTO_URL = os.environ.get("PHOTO_URL", "http://127.0.0.1:8080/photo")
 PHOTO_QUALITY = 90
 
 # 靴箱判定（shoebox-judge）。マス設定と基準画像は SHOEBOX_DIR の config.json / empty.png をそのまま読む。
-# 動いている間は CAMERA_LOCK を握り続けるので、shoebox-judge の watch は自分では撮らずに休む
+# 動いている間は CAMERA_LOCK を握り続けるので、shoebox-judge の watch は自分では撮らずに休む。
+# ただし shoebox-judge の snapshot などが CAMERA_REQUEST を置いたら、映像を止めてカメラを譲る（shoebox.py と同じパス）
 SHOEBOX_DIR = Path(os.environ.get("SHOEBOX_DIR", Path.home() / "shoebox"))
 SHOEBOX_URL = os.environ.get("SHOEBOX_URL", "http://127.0.0.1:8080/events")  # 空にすると送らない
 SHOEBOX_INTERVAL = 60  # 判定の間隔（秒）
 SHOEBOX_WAIT = 30  # 手が写っている（人が前にいる）間は判定を待つ。これより長く続いたらその回は飛ばす（秒）
 CAMERA_LOCK = "/tmp/pi-camera.lock"
+CAMERA_REQUEST = "/tmp/pi-camera.request"
+REQUEST_TIMEOUT = 30  # 依頼がこれより長く残っていたら、依頼した側が落ちたとみなして消す（秒）
 
 SCREEN_W, SCREEN_H = (int(v) for v in Path("/sys/class/graphics/fb0/virtual_size").read_text().split(","))
 # 映像は真ん中に置き、上下左右の余白に文字を描く（YUV420 のまま縮めるので幅も高さも偶数）
@@ -104,6 +108,9 @@ class Camera:
         self.lock = open(CAMERA_LOCK, "a")
         fcntl.flock(self.lock, fcntl.LOCK_EX)  # shoebox-judge の watch が撮影中なら、終わるまで待つ
         self.latest = None
+        self._start()
+
+    def _start(self):
         self.process = subprocess.Popen(
             ["rpicam-vid", "-t", "0", "--width", str(CAPTURE_W), "--height", str(CAPTURE_H),
              "--framerate", str(FRAMERATE), "--codec", "yuv420",
@@ -112,12 +119,13 @@ class Camera:
              "-n", "-o", "-"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
-        threading.Thread(target=self._read, daemon=True).start()
+        self.reader = threading.Thread(target=self._read, args=(self.process,), daemon=True)
+        self.reader.start()
 
-    def _read(self):
+    def _read(self, process):
         # 変換は使うフレームだけにしたいので、ここでは生のバイト列を持つだけ
         size = CAPTURE_W * CAPTURE_H * 3 // 2
-        while (data := self.process.stdout.read(size)) and len(data) == size:
+        while (data := process.stdout.read(size)) and len(data) == size:
             self.latest = data
 
     def snapshot(self):
@@ -160,6 +168,54 @@ class Camera:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait()
+        self.reader.join(timeout=3)
+        self.latest = None  # 止まる前の古い1枚で認識・撮影・靴箱判定をしないように
+
+    @staticmethod
+    def requested():
+        return os.path.exists(CAMERA_REQUEST)
+
+    def hand_over(self, stop_event):
+        """映像を止めてカメラを譲り、相手が撮り終えてロックを外したら再開する。"""
+        print("camera: handing over", flush=True)
+        self.stop()
+        fcntl.flock(self.lock, fcntl.LOCK_UN)
+        give_up_at = time.monotonic() + REQUEST_TIMEOUT
+        # 相手はロックを握ってから依頼を消すので、依頼が消えるまではロックを取りに行かない
+        while not stop_event.wait(0.1):
+            if self.requested():
+                if time.monotonic() < give_up_at:
+                    continue
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(CAMERA_REQUEST)
+            try:
+                fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                continue
+            self._start()
+            print("camera: resumed", flush=True)
+            return
+
+
+class HandOver:
+    """CAMERA_REQUEST が置かれたら（shoebox-judge の snapshot など）、カメラを譲る。
+    ピースのカウントダウン中は撮り終えるまで待つ（依頼した側は CAMERA_LOCK_TIMEOUT まで待ってくれる）。"""
+
+    def __init__(self, camera, recognition):
+        self.camera = camera
+        self.recognition = recognition
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        while not self.stop_event.wait(0.2):
+            if self.camera.requested() and self.recognition.countdown_started is None:
+                self.camera.hand_over(self.stop_event)
+
+    def stop(self):
+        self.stop_event.set()
+        self.thread.join(timeout=5)
 
 
 def make_photo(data):
@@ -463,6 +519,7 @@ def main():
     camera = Camera()
     recognition = Recognition(camera, landmarker, mp)
     shoebox = Shoebox(camera, recognition)
+    hand_over = HandOver(camera, recognition)
     face = Face()
     shown, margin_state, screen = None, None, None
     try:
@@ -488,6 +545,7 @@ def main():
                     shown = ("face", id(frame))
             time.sleep(0.02)
     finally:
+        hand_over.stop()
         shoebox.stop()
         recognition.stop()
         camera.stop()

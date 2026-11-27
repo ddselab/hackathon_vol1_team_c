@@ -18,6 +18,7 @@ rpicam-vid（1280×748、15fps、開きっぱなし、プレビューなし）
 - 映像は靴箱判定と同じ 4:3 全体のモード（1296×972）から、上（天井側）を切り取って横長にしている
 - 画面の余白には、上に状態（`HANDS n` / `SENDING` / `POSTED` / `ERROR`）、下に日時、左にカウントダウンを描く
 - 動いている間は `/tmp/pi-camera.lock` を握るので、`shoebox-judge` の `watch`（`shoebox.service`）は撮影を休む
+- `shoebox-judge` の `snapshot` などが `/tmp/pi-camera.request` を置いたら、映像を止めてカメラを譲り、撮り終わったら再開する（カウントダウン中は撮り終えてから譲る）
 
 ## Pi での置き場所
 
